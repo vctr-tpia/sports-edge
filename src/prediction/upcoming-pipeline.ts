@@ -49,7 +49,7 @@ const SAMPLE_INPUT_PATH = path.join(
   "upcoming-matches",
   "atp-upcoming.sample.json",
 );
-const FEATURE_VERSION = "baseline-features-v3";
+const FEATURE_VERSION = "baseline-features-v4";
 
 type UpcomingSummary = {
   generatedAt: string;

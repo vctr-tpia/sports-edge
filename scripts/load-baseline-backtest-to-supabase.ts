@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { getSupabaseAdminClient } from "../src/lib/supabase-admin";
 
-const evaluationVersion = process.argv[2] ?? "baseline-v3";
+const evaluationVersion = process.argv[2] ?? "baseline-v4";
 const EVALUATION_DIR = path.join(process.cwd(), "work", "evaluation", evaluationVersion);
 const UPSERT_BATCH_SIZE = 500;
 const SELECT_BATCH_SIZE = 100;

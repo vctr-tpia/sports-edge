@@ -2,18 +2,59 @@ import type { MatchPrediction, PredictionFactor } from "@/src/domain/predictions
 import type { PreMatchFeatureSnapshot } from "@/src/domain/predictions/feature-snapshot";
 import { projectMatchTotals } from "@/src/prediction/match-projection";
 
-const FACTOR_WEIGHTS = {
-  overall_elo: 0.3,
-  surface_elo: 0.22,
-  recent_form: 0.1,
-  surface_recent_form: 0.08,
-  surface_service_points_won: 0.06,
-  surface_return_points_won: 0.04,
-  opponent_quality: 0.1,
-  surface_win_rate: 0.05,
-  rest_days: 0.03,
-  head_to_head: 0.02,
+const WEIGHT_PROFILES = {
+  "baseline-v1": {
+    overall_elo: 0.3,
+    surface_elo: 0.22,
+    recent_form: 0.1,
+    surface_recent_form: 0,
+    surface_service_points_won: 0,
+    surface_return_points_won: 0,
+    opponent_quality: 0.1,
+    surface_win_rate: 0.05,
+    rest_days: 0.03,
+    head_to_head: 0.02,
+  },
+  "baseline-v2": {
+    overall_elo: 0.3,
+    surface_elo: 0.22,
+    recent_form: 0.1,
+    surface_recent_form: 0.08,
+    surface_service_points_won: 0,
+    surface_return_points_won: 0,
+    opponent_quality: 0.1,
+    surface_win_rate: 0.05,
+    rest_days: 0.03,
+    head_to_head: 0.02,
+  },
+  "baseline-v3": {
+    overall_elo: 0.3,
+    surface_elo: 0.22,
+    recent_form: 0.1,
+    surface_recent_form: 0.08,
+    surface_service_points_won: 0.06,
+    surface_return_points_won: 0.04,
+    opponent_quality: 0.1,
+    surface_win_rate: 0.05,
+    rest_days: 0.03,
+    head_to_head: 0.02,
+  },
+  "baseline-v4": {
+    overall_elo: 0.42,
+    surface_elo: 0.33,
+    recent_form: 0.03,
+    surface_recent_form: 0.02,
+    surface_service_points_won: 0.015,
+    surface_return_points_won: 0.01,
+    opponent_quality: 0.08,
+    surface_win_rate: 0.02,
+    rest_days: 0,
+    head_to_head: 0.005,
+  },
 } as const;
+
+type ModelVersion = keyof typeof WEIGHT_PROFILES;
+type FactorKey = keyof (typeof WEIGHT_PROFILES)["baseline-v4"];
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -36,19 +77,20 @@ function formatSurfaceLabel(surface: string) {
 }
 
 function makeFactor(
-  key: keyof typeof FACTOR_WEIGHTS,
+  weights: typeof WEIGHT_PROFILES[ModelVersion],
+  key: FactorKey,
   label: string,
   playerAValue: number,
   playerBValue: number,
   normalization: number,
 ): PredictionFactor {
   const rawEdge = playerAValue - playerBValue;
-  const edgeToPlayerA = (rawEdge / normalization) * FACTOR_WEIGHTS[key];
+  const edgeToPlayerA = (rawEdge / normalization) * weights[key];
 
   return {
     key,
     label,
-    weight: FACTOR_WEIGHTS[key],
+    weight: weights[key],
     playerAValue,
     playerBValue,
     edgeToPlayerA,
@@ -56,44 +98,73 @@ function makeFactor(
   };
 }
 
-function isBaselineV2(snapshot: PreMatchFeatureSnapshot) {
-  return snapshot.featureVersion === "baseline-features-v2";
+function modelVersionFromSnapshot(snapshot: PreMatchFeatureSnapshot): ModelVersion {
+  switch (snapshot.featureVersion) {
+    case "baseline-features-v4":
+      return "baseline-v4";
+    case "baseline-features-v3":
+      return "baseline-v3";
+    case "baseline-features-v2":
+      return "baseline-v2";
+    default:
+      return "baseline-v1";
+  }
 }
 
-function isBaselineV3(snapshot: PreMatchFeatureSnapshot) {
-  return snapshot.featureVersion === "baseline-features-v3";
+function includeFactor(weights: typeof WEIGHT_PROFILES[ModelVersion], key: FactorKey) {
+  return weights[key] > 0;
 }
 
 export function generatePredictionFromFeatureSnapshot(
   snapshot: PreMatchFeatureSnapshot,
 ): MatchPrediction {
-  const explanation: PredictionFactor[] = [
-    makeFactor(
-      "overall_elo",
-      "Overall Elo",
-      snapshot.playerAOverallElo,
-      snapshot.playerBOverallElo,
-      400,
-    ),
-    makeFactor(
-      "surface_elo",
-      formatSurfaceLabel(snapshot.surface),
-      snapshot.playerASurfaceElo,
-      snapshot.playerBSurfaceElo,
-      400,
-    ),
-    makeFactor(
-      "recent_form",
-      "Recent Form",
-      snapshot.playerARecentForm,
-      snapshot.playerBRecentForm,
-      100,
-    ),
-  ];
+  const modelVersion = modelVersionFromSnapshot(snapshot);
+  const weights = WEIGHT_PROFILES[modelVersion];
+  const explanation: PredictionFactor[] = [];
 
-  if (isBaselineV2(snapshot) || isBaselineV3(snapshot)) {
+  if (includeFactor(weights, "overall_elo")) {
     explanation.push(
       makeFactor(
+        weights,
+        "overall_elo",
+        "Overall Elo",
+        snapshot.playerAOverallElo,
+        snapshot.playerBOverallElo,
+        400,
+      ),
+    );
+  }
+
+  if (includeFactor(weights, "surface_elo")) {
+    explanation.push(
+      makeFactor(
+        weights,
+        "surface_elo",
+        formatSurfaceLabel(snapshot.surface),
+        snapshot.playerASurfaceElo,
+        snapshot.playerBSurfaceElo,
+        400,
+      ),
+    );
+  }
+
+  if (includeFactor(weights, "recent_form")) {
+    explanation.push(
+      makeFactor(
+        weights,
+        "recent_form",
+        "Recent Form",
+        snapshot.playerARecentForm,
+        snapshot.playerBRecentForm,
+        100,
+      ),
+    );
+  }
+
+  if (includeFactor(weights, "surface_recent_form")) {
+    explanation.push(
+      makeFactor(
+        weights,
         "surface_recent_form",
         `Recent ${snapshot.surface[0].toUpperCase()}${snapshot.surface.slice(1)} Form`,
         snapshot.playerASurfaceRecentForm ?? 50,
@@ -103,16 +174,23 @@ export function generatePredictionFromFeatureSnapshot(
     );
   }
 
-  if (isBaselineV3(snapshot)) {
+  if (includeFactor(weights, "surface_service_points_won")) {
     explanation.push(
       makeFactor(
+        weights,
         "surface_service_points_won",
         `${snapshot.surface[0].toUpperCase()}${snapshot.surface.slice(1)} Service Strength`,
         snapshot.playerASurfaceServicePointsWon ?? 50,
         snapshot.playerBSurfaceServicePointsWon ?? 50,
         100,
       ),
+    );
+  }
+
+  if (includeFactor(weights, "surface_return_points_won")) {
+    explanation.push(
       makeFactor(
+        weights,
         "surface_return_points_won",
         `${snapshot.surface[0].toUpperCase()}${snapshot.surface.slice(1)} Return Strength`,
         snapshot.playerASurfaceReturnPointsWon ?? 50,
@@ -122,36 +200,57 @@ export function generatePredictionFromFeatureSnapshot(
     );
   }
 
-  explanation.push(
-    makeFactor(
+  if (includeFactor(weights, "opponent_quality")) {
+    explanation.push(
+      makeFactor(
+        weights,
       "opponent_quality",
       "Opponent Quality",
       snapshot.playerAOpponentQuality,
       snapshot.playerBOpponentQuality,
       400,
-    ),
-    makeFactor(
+      ),
+    );
+  }
+
+  if (includeFactor(weights, "surface_win_rate")) {
+    explanation.push(
+      makeFactor(
+        weights,
       "surface_win_rate",
       "Surface Win Rate",
       snapshot.playerASurfaceWinRate,
       snapshot.playerBSurfaceWinRate,
       100,
-    ),
-    makeFactor(
+      ),
+    );
+  }
+
+  if (includeFactor(weights, "rest_days")) {
+    explanation.push(
+      makeFactor(
+        weights,
       "rest_days",
       "Rest Days",
       snapshot.playerARestDays ?? 0,
       snapshot.playerBRestDays ?? 0,
       14,
-    ),
-    makeFactor(
+      ),
+    );
+  }
+
+  if (includeFactor(weights, "head_to_head")) {
+    explanation.push(
+      makeFactor(
+        weights,
       "head_to_head",
       "Head-to-Head",
       snapshot.playerAH2HWins,
       snapshot.playerBH2HWins,
       10,
-    ),
-  );
+      ),
+    );
+  }
 
   const score = explanation.reduce((total, factor) => total + factor.edgeToPlayerA, 0);
   const playerAWinProbability = clamp(probabilityFromScore(score), 0.01, 0.99);
@@ -169,11 +268,7 @@ export function generatePredictionFromFeatureSnapshot(
 
   return {
     matchId: snapshot.matchId,
-    modelVersion: isBaselineV3(snapshot)
-      ? "baseline-v3"
-      : isBaselineV2(snapshot)
-        ? "baseline-v2"
-        : "baseline-v1",
+    modelVersion,
     playerAWinProbability,
     playerBWinProbability,
     confidence,

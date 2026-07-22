@@ -886,6 +886,7 @@ export async function computeBaselineBacktest() {
     "baseline-features-v1",
     "baseline-features-v2",
     "baseline-features-v3",
+    "baseline-features-v4",
   ];
 
   for (const snapshot of sortedSnapshots) {
@@ -913,7 +914,7 @@ export async function computeBaselineBacktest() {
 
   const primaryModelVersion = createFullModelPredictionRow(
     sortedSnapshots[0],
-    sortedSnapshots[0]?.featureVersion ?? "baseline-features-v3",
+    "baseline-features-v4",
     {
       playerARankAtMatch:
         rankingByMatchPlayer.get(`${sortedSnapshots[0]?.matchId}:${sortedSnapshots[0]?.playerAId}`) ??
@@ -985,7 +986,7 @@ export async function computeBaselineBacktest() {
   const comparisonOverview = buildComparisonOverview(rowsByModel);
   const primarySnapshots = sortedSnapshots.map((snapshot) => ({
     ...snapshot,
-    featureVersion: "baseline-features-v3" as const,
+    featureVersion: "baseline-features-v4" as const,
   }));
   const ablationOverview = buildAblationOverview(primaryRows, primarySnapshots);
 
@@ -1024,7 +1025,7 @@ export async function computeBaselineBacktest() {
       "Historical evaluation currently covers main-draw ATP matches only, so qualifying-vs-main-draw splits are not yet available.",
       "Market-favorite benchmarking is still pending an odds source.",
       "Projected sets/games validation is not included in this report yet and should be evaluated separately before being trusted in-product.",
-      "Ablation rows measure how baseline-v3 changes when a single scoring factor is removed across the same historical ATP sample.",
+      "Ablation rows measure how baseline-v4 changes when a single scoring factor is removed across the same historical ATP sample.",
     ],
   };
 

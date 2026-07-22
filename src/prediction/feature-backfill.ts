@@ -20,7 +20,7 @@ import {
 
 const ACTIVE_DIR = path.join(process.cwd(), "work", "normalized", "active-atp");
 const OUTPUT_DIR = path.join(process.cwd(), "work", "features", "atp-match-features");
-const FEATURE_VERSION = "baseline-features-v3";
+const FEATURE_VERSION = "baseline-features-v4";
 
 type NormalizedTournament = {
   id: string;
