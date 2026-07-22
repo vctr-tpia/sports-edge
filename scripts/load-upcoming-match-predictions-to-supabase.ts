@@ -1,0 +1,11 @@
+import { loadUpcomingMatchPredictionsToSupabase } from "../src/upcoming/load-upcoming-match-predictions-to-supabase";
+
+async function main() {
+  const summary = await loadUpcomingMatchPredictionsToSupabase();
+  console.log(JSON.stringify(summary, null, 2));
+}
+
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});

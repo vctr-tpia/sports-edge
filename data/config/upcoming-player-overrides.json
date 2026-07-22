@@ -1,0 +1,12 @@
+{
+  "aliases": [
+    {
+      "provider": "matchstat-rapidapi",
+      "providerName": "Pedro Martinez Portero",
+      "providerCountryCode": "ESP",
+      "externalAtpId": "124079",
+      "notes": "RapidAPI uses the full Spanish surname while the local ATP player record is stored as Pedro Martinez."
+    }
+  ],
+  "ignore": []
+}

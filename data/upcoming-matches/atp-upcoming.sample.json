@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-07-21T12:00:00Z",
+  "source": "local-demo-feed",
+  "tournaments": [
+    {
+      "externalTournamentId": "sports-edge-demo-open-2026",
+      "name": "Sports Edge Demo Open",
+      "season": 2026,
+      "countryCode": "US",
+      "city": "San Diego",
+      "surface": "hard",
+      "level": "atp_500",
+      "startDate": "2026-07-22",
+      "endDate": "2026-07-28",
+      "matches": [
+        {
+          "externalMatchId": "demo-2026-07-22-zverev-fritz",
+          "matchDate": "2026-07-22",
+          "round": "R32",
+          "bestOf": 3,
+          "playerAExternalAtpId": "100644",
+          "playerBExternalAtpId": "126203"
+        },
+        {
+          "externalMatchId": "demo-2026-07-22-alcaraz-medvedev",
+          "matchDate": "2026-07-22",
+          "round": "R32",
+          "bestOf": 3,
+          "playerAExternalAtpId": "207989",
+          "playerBExternalAtpId": "106421"
+        },
+        {
+          "externalMatchId": "demo-2026-07-23-sinner-rune",
+          "matchDate": "2026-07-23",
+          "round": "R16",
+          "bestOf": 3,
+          "playerAExternalAtpId": "206173",
+          "playerBExternalAtpId": "208029"
+        },
+        {
+          "externalMatchId": "demo-2026-07-23-djokovic-ruud",
+          "matchDate": "2026-07-23",
+          "round": "R16",
+          "bestOf": 3,
+          "playerAExternalAtpId": "104925",
+          "playerBExternalAtpId": "134770"
+        }
+      ]
+    }
+  ]
+}

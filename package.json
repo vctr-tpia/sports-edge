@@ -1,0 +1,50 @@
+{
+  "name": "sports-edge",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "inspect:sackmann": "tsx scripts/inspect-sackmann.ts",
+    "prepare:sackmann-staging": "tsx scripts/prepare-sackmann-staging.ts",
+    "prepare:active-history": "tsx scripts/prepare-active-history.ts",
+    "load:active-history": "tsx scripts/load-active-history-to-supabase.ts",
+    "compute:elo-backfill": "tsx scripts/compute-elo-backfill.ts",
+    "load:elo-backfill": "tsx scripts/load-elo-to-supabase.ts",
+    "compute:historical-features": "tsx scripts/compute-historical-match-features.ts",
+    "load:historical-features": "tsx scripts/load-historical-match-features-to-supabase.ts",
+    "compute:baseline-backtest": "tsx scripts/compute-baseline-backtest.ts",
+    "load:baseline-backtest": "tsx scripts/load-baseline-backtest-to-supabase.ts",
+    "compute:upcoming-matches": "tsx scripts/compute-upcoming-match-predictions.ts",
+    "load:upcoming-matches": "tsx scripts/load-upcoming-match-predictions-to-supabase.ts",
+    "sync:rapidapi-upcoming": "tsx scripts/sync-rapidapi-upcoming.ts",
+    "ingest:rapidapi-results": "tsx scripts/ingest-rapidapi-results.ts",
+    "daily:refresh": "tsx scripts/daily-refresh.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "latest",
+    "@tailwindcss/postcss": "^4.3.3",
+    "clsx": "latest",
+    "csv-parse": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "autoprefixer": "latest",
+    "eslint": "latest",
+    "eslint-config-next": "latest",
+    "postcss": "latest",
+    "tailwindcss": "latest",
+    "ts-node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}
