@@ -1,11 +1,11 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { MatchPrediction, PredictionFactor } from "@/src/domain/predictions/explanation";
-import type {
-  HistoricalMatchFeatureSnapshot,
-} from "@/src/domain/predictions/feature-snapshot";
+import type { PredictionFactor } from "@/src/domain/predictions/explanation";
+import type { HistoricalMatchFeatureSnapshot } from "@/src/domain/predictions/feature-snapshot";
 import type { Surface, TournamentLevel } from "@/src/domain/shared";
+import { loadActiveHistoricalDataset } from "@/src/lib/active-history";
 import { generatePredictionFromFeatureSnapshot } from "@/src/prediction/baseline-feature-model";
+import { projectMatchTotals } from "@/src/prediction/match-projection";
 
 const FEATURES_DIR = path.join(process.cwd(), "work", "features", "atp-match-features");
 const OUTPUT_ROOT_DIR = path.join(process.cwd(), "work", "evaluation");
@@ -55,16 +55,30 @@ type HistoricalFeatureRow = {
   player_a_h2h_edge: number;
 };
 
-export type BacktestPredictionRow = {
+type ModelFamily = "full_model" | "benchmark";
+
+type RankingContext = {
+  playerARankAtMatch: number | null;
+  playerBRankAtMatch: number | null;
+};
+
+type BacktestPredictionRow = {
   match_id: string;
   model_version: string;
+  model_family: ModelFamily;
   generated_at: string;
   match_date: string;
+  season: string;
   tournament_id: string;
   tournament_level: TournamentLevel;
   surface: Surface;
+  best_of: 3 | 5;
   player_a_id: string;
   player_b_id: string;
+  player_a_rank_at_match: number | null;
+  player_b_rank_at_match: number | null;
+  ranking_gap_bucket: string;
+  favorite_probability_bucket: string;
   favorite_player_id: string;
   actual_winner_id: string;
   actual_loser_id: string;
@@ -99,6 +113,29 @@ type SegmentSummary = {
   averageConfidence: number;
 };
 
+type ComparisonOverviewRow = {
+  modelVersion: string;
+  modelFamily: ModelFamily;
+  matchCount: number;
+  accuracy: number;
+  logLoss: number;
+  brierScore: number;
+  calibrationError: number;
+  averageConfidence: number;
+  averageFavoriteWinProbability: number;
+  favoriteWinRate: number;
+};
+
+type SegmentComparisonRow = SegmentSummary & {
+  modelVersion: string;
+  modelFamily: ModelFamily;
+};
+
+type SegmentComparison = {
+  segment: string;
+  rows: SegmentComparisonRow[];
+};
+
 export type BacktestSummary = {
   modelVersion: string;
   generatedAt: string;
@@ -111,6 +148,7 @@ export type BacktestSummary = {
     accuracy: number;
     logLoss: number;
     brierScore: number;
+    calibrationError: number;
     averageConfidence: number;
     averageFavoriteWinProbability: number;
     favoriteWinRate: number;
@@ -118,6 +156,18 @@ export type BacktestSummary = {
   calibrationBuckets: CalibrationBucket[];
   bySurface: SegmentSummary[];
   byTournamentLevel: SegmentSummary[];
+  byBestOf: SegmentSummary[];
+  byRankingGapBucket: SegmentSummary[];
+  byFavoriteProbabilityBucket: SegmentSummary[];
+  bySeason: SegmentSummary[];
+  comparisonOverview: ComparisonOverviewRow[];
+  comparisonBestByMetric: {
+    accuracy: string;
+    logLoss: string;
+    brierScore: string;
+    calibrationError: string;
+  };
+  notes: string[];
 };
 
 function roundMetric(value: number, digits = 4) {
@@ -146,8 +196,51 @@ function average(values: number[]) {
     return 0;
   }
 
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return total / values.length;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function inferBestOf(snapshot: HistoricalMatchFeatureSnapshot): 3 | 5 {
+  return snapshot.tournamentLevel === "grand_slam" ? 5 : 3;
+}
+
+function favoriteProbabilityBucket(probability: number) {
+  for (let start = 0.5; start < 1; start += CALIBRATION_BUCKET_SIZE) {
+    const end = Math.min(1, start + CALIBRATION_BUCKET_SIZE);
+    if (
+      probability >= start &&
+      (end === 1 ? probability <= end : probability < end)
+    ) {
+      return `${Math.round(start * 100)}-${Math.round(end * 100)}%`;
+    }
+  }
+
+  return "50-55%";
+}
+
+function rankingGapBucket(rankA: number | null, rankB: number | null) {
+  if (rankA === null || rankB === null) {
+    return "unknown";
+  }
+
+  const gap = Math.abs(rankA - rankB);
+  if (gap <= 10) {
+    return "0-10";
+  }
+  if (gap <= 25) {
+    return "11-25";
+  }
+  if (gap <= 50) {
+    return "26-50";
+  }
+  if (gap <= 100) {
+    return "51-100";
+  }
+
+  return "100+";
+}
+
+function toSeason(matchDate: string) {
+  return matchDate.slice(0, 4);
 }
 
 function summarizeSegment(segment: string, rows: BacktestPredictionRow[]): SegmentSummary {
@@ -191,6 +284,95 @@ function buildCalibrationBuckets(rows: BacktestPredictionRow[]): CalibrationBuck
   }
 
   return buckets;
+}
+
+function expectedCalibrationError(rows: BacktestPredictionRow[]) {
+  if (rows.length === 0) {
+    return 0;
+  }
+
+  const buckets = buildCalibrationBuckets(rows);
+  const weightedError = buckets.reduce((sum, bucket) => {
+    const bucketWeight = bucket.matchCount / rows.length;
+    return sum + Math.abs(bucket.averagePredictedWinProbability - bucket.actualFavoriteWinRate) * bucketWeight;
+  }, 0);
+
+  return roundMetric(weightedError, 5);
+}
+
+function buildSegmentSummaries(
+  rows: BacktestPredictionRow[],
+  getSegment: (row: BacktestPredictionRow) => string,
+  sortOrder?: string[],
+) {
+  const grouped = new Map<string, BacktestPredictionRow[]>();
+
+  for (const row of rows) {
+    const segment = getSegment(row);
+    grouped.set(segment, [...(grouped.get(segment) ?? []), row]);
+  }
+
+  const summaries = [...grouped.entries()].map(([segment, segmentRows]) =>
+    summarizeSegment(segment, segmentRows),
+  );
+
+  if (sortOrder) {
+    const order = new Map(sortOrder.map((segment, index) => [segment, index]));
+    summaries.sort((left, right) => {
+      const leftIndex = order.get(left.segment) ?? Number.MAX_SAFE_INTEGER;
+      const rightIndex = order.get(right.segment) ?? Number.MAX_SAFE_INTEGER;
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+      }
+
+      return left.segment.localeCompare(right.segment);
+    });
+    return summaries;
+  }
+
+  return summaries.sort((left, right) => left.segment.localeCompare(right.segment));
+}
+
+function buildSegmentComparison(
+  rows: BacktestPredictionRow[],
+  getSegment: (row: BacktestPredictionRow) => string,
+  sortOrder?: string[],
+): SegmentComparison[] {
+  const bySegment = new Map<string, Map<string, BacktestPredictionRow[]>>();
+
+  for (const row of rows) {
+    const segment = getSegment(row);
+    const rowsByModel = bySegment.get(segment) ?? new Map<string, BacktestPredictionRow[]>();
+    rowsByModel.set(row.model_version, [...(rowsByModel.get(row.model_version) ?? []), row]);
+    bySegment.set(segment, rowsByModel);
+  }
+
+  const comparisons = [...bySegment.entries()].map(([segment, rowsByModel]) => ({
+    segment,
+    rows: [...rowsByModel.entries()]
+      .map(([modelVersion, modelRows]) => ({
+        ...summarizeSegment(segment, modelRows),
+        modelVersion,
+        modelFamily: modelRows[0]?.model_family ?? "benchmark",
+      }))
+      .sort((left, right) => left.modelVersion.localeCompare(right.modelVersion)),
+  }));
+
+  if (sortOrder) {
+    const order = new Map(sortOrder.map((segment, index) => [segment, index]));
+    comparisons.sort((left, right) => {
+      const leftIndex = order.get(left.segment) ?? Number.MAX_SAFE_INTEGER;
+      const rightIndex = order.get(right.segment) ?? Number.MAX_SAFE_INTEGER;
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+      }
+
+      return left.segment.localeCompare(right.segment);
+    });
+    return comparisons;
+  }
+
+  return comparisons.sort((left, right) => left.segment.localeCompare(right.segment));
 }
 
 function mapHistoricalFeatureRow(row: HistoricalFeatureRow): HistoricalMatchFeatureSnapshot {
@@ -239,111 +421,491 @@ function mapHistoricalFeatureRow(row: HistoricalFeatureRow): HistoricalMatchFeat
   };
 }
 
-function toHistoricalPredictionRow(
+function eloProbability(playerARating: number, playerBRating: number) {
+  return 1 / (1 + 10 ** ((playerBRating - playerARating) / 400));
+}
+
+function logisticProbability(edge: number, scale: number) {
+  return 1 / (1 + Math.exp(-(edge / scale)));
+}
+
+function makeProjection(snapshot: HistoricalMatchFeatureSnapshot, playerAWinProbability: number, playerBWinProbability: number) {
+  return projectMatchTotals({
+    playerAWinProbability,
+    playerBWinProbability,
+    bestOf: inferBestOf(snapshot),
+    averageSurfaceServicePointsWon:
+      ((snapshot.playerASurfaceServicePointsWon ?? 62) + (snapshot.playerBSurfaceServicePointsWon ?? 62)) / 2,
+  });
+}
+
+function toPredictionFactor(
+  key: PredictionFactor["key"],
+  label: string,
+  playerAValue: number,
+  playerBValue: number,
+  weight = 1,
+): PredictionFactor {
+  return {
+    key,
+    label,
+    weight,
+    playerAValue,
+    playerBValue,
+    edgeToPlayerA: roundMetric(playerAValue - playerBValue, 5),
+    summary: playerAValue >= playerBValue ? `${label} favors player A` : `${label} favors player B`,
+  };
+}
+
+function createBenchmarkPredictionRow(
   snapshot: HistoricalMatchFeatureSnapshot,
-  prediction: MatchPrediction,
+  modelVersion: string,
+  modelFamily: ModelFamily,
+  playerAWinProbability: number,
+  explanation: PredictionFactor[],
+  rankingContext: RankingContext,
 ): BacktestPredictionRow {
+  const probabilityPlayerA = clampProbability(playerAWinProbability);
+  const probabilityPlayerB = clampProbability(1 - probabilityPlayerA);
+  const favoritePlayerId =
+    probabilityPlayerA >= probabilityPlayerB ? snapshot.playerAId : snapshot.playerBId;
   const playerAActualWin = snapshot.actualWinnerId === snapshot.playerAId ? 1 : 0;
-  const probabilityPlayerA = clampProbability(prediction.playerAWinProbability);
-  const favoriteWinProbability = Math.max(
-    prediction.playerAWinProbability,
-    prediction.playerBWinProbability,
-  );
-  const favoriteWon = prediction.favoritePlayerId === snapshot.actualWinnerId ? 1 : 0;
+  const favoriteWinProbability = Math.max(probabilityPlayerA, probabilityPlayerB);
+  const favoriteWon = favoritePlayerId === snapshot.actualWinnerId ? 1 : 0;
   const logLoss = -(
     playerAActualWin * Math.log(probabilityPlayerA) +
     (1 - playerAActualWin) * Math.log(1 - probabilityPlayerA)
   );
   const brierScore = (probabilityPlayerA - playerAActualWin) ** 2;
+  const bestOf = inferBestOf(snapshot);
 
   return {
     match_id: snapshot.matchId,
-    model_version: prediction.modelVersion,
+    model_version: modelVersion,
+    model_family: modelFamily,
     generated_at: snapshot.matchDate,
     match_date: snapshot.matchDate,
+    season: toSeason(snapshot.matchDate),
     tournament_id: snapshot.tournamentId,
     tournament_level: snapshot.tournamentLevel,
     surface: snapshot.surface,
+    best_of: bestOf,
     player_a_id: snapshot.playerAId,
     player_b_id: snapshot.playerBId,
-    favorite_player_id: prediction.favoritePlayerId,
+    player_a_rank_at_match: rankingContext.playerARankAtMatch,
+    player_b_rank_at_match: rankingContext.playerBRankAtMatch,
+    ranking_gap_bucket: rankingGapBucket(
+      rankingContext.playerARankAtMatch,
+      rankingContext.playerBRankAtMatch,
+    ),
+    favorite_probability_bucket: favoriteProbabilityBucket(favoriteWinProbability),
+    favorite_player_id: favoritePlayerId,
     actual_winner_id: snapshot.actualWinnerId,
     actual_loser_id: snapshot.actualLoserId,
-    player_a_win_probability: roundMetric(prediction.playerAWinProbability, 5),
-    player_b_win_probability: roundMetric(prediction.playerBWinProbability, 5),
-    confidence: roundMetric(prediction.confidence, 5),
+    player_a_win_probability: roundMetric(probabilityPlayerA, 5),
+    player_b_win_probability: roundMetric(probabilityPlayerB, 5),
+    confidence: roundMetric(Math.abs(probabilityPlayerA - 0.5) * 2, 5),
     result: favoriteWon === 1 ? "won" : "lost",
     player_a_actual_win: playerAActualWin,
     favorite_win_probability: roundMetric(favoriteWinProbability, 5),
     favorite_won: favoriteWon,
     log_loss: roundMetric(logLoss, 6),
     brier_score: roundMetric(brierScore, 6),
-    explanation: prediction.explanation,
+    explanation,
   };
 }
 
-export async function computeBaselineBacktest() {
-  const snapshots = (
-    await readJsonLines<HistoricalFeatureRow>(
-      path.join(FEATURES_DIR, "historical_match_features.jsonl"),
-    )
-  ).map(mapHistoricalFeatureRow);
+function createRankingBaselinePrediction(
+  snapshot: HistoricalMatchFeatureSnapshot,
+  rankingContext: RankingContext,
+) {
+  let playerAWinProbability = 0.5;
 
-  const predictionRows = snapshots.map((snapshot) =>
-    toHistoricalPredictionRow(snapshot, generatePredictionFromFeatureSnapshot(snapshot)),
+  if (
+    rankingContext.playerARankAtMatch !== null &&
+    rankingContext.playerBRankAtMatch !== null
+  ) {
+    playerAWinProbability = logisticProbability(
+      rankingContext.playerBRankAtMatch - rankingContext.playerARankAtMatch,
+      12,
+    );
+  } else if (rankingContext.playerARankAtMatch !== null) {
+    playerAWinProbability = 0.58;
+  } else if (rankingContext.playerBRankAtMatch !== null) {
+    playerAWinProbability = 0.42;
+  }
+
+  return createBenchmarkPredictionRow(
+    snapshot,
+    "ranking-baseline",
+    "benchmark",
+    playerAWinProbability,
+    [
+      toPredictionFactor(
+        "recent_form",
+        "ATP Rank At Match",
+        rankingContext.playerBRankAtMatch === null ? 0 : -(rankingContext.playerARankAtMatch ?? 999),
+        rankingContext.playerARankAtMatch === null ? 0 : -(rankingContext.playerBRankAtMatch ?? 999),
+      ),
+    ],
+    rankingContext,
   );
-  const modelVersion = predictionRows[0]?.model_version ?? "baseline";
-  const outputDir = path.join(OUTPUT_ROOT_DIR, modelVersion);
+}
+
+function createOverallEloBaselinePrediction(
+  snapshot: HistoricalMatchFeatureSnapshot,
+  rankingContext: RankingContext,
+) {
+  return createBenchmarkPredictionRow(
+    snapshot,
+    "overall-elo-baseline",
+    "benchmark",
+    eloProbability(snapshot.playerAOverallElo, snapshot.playerBOverallElo),
+    [
+      toPredictionFactor(
+        "overall_elo",
+        "Overall Elo Only",
+        snapshot.playerAOverallElo,
+        snapshot.playerBOverallElo,
+      ),
+    ],
+    rankingContext,
+  );
+}
+
+function createSurfaceEloBaselinePrediction(
+  snapshot: HistoricalMatchFeatureSnapshot,
+  rankingContext: RankingContext,
+) {
+  return createBenchmarkPredictionRow(
+    snapshot,
+    "surface-elo-baseline",
+    "benchmark",
+    eloProbability(snapshot.playerASurfaceElo, snapshot.playerBSurfaceElo),
+    [
+      toPredictionFactor(
+        "surface_elo",
+        `${snapshot.surface[0].toUpperCase()}${snapshot.surface.slice(1)} Elo Only`,
+        snapshot.playerASurfaceElo,
+        snapshot.playerBSurfaceElo,
+      ),
+    ],
+    rankingContext,
+  );
+}
+
+function createBlendedEloBaselinePrediction(
+  snapshot: HistoricalMatchFeatureSnapshot,
+  rankingContext: RankingContext,
+) {
+  const playerABlended = snapshot.playerAOverallElo * 0.35 + snapshot.playerASurfaceElo * 0.65;
+  const playerBBlended = snapshot.playerBOverallElo * 0.35 + snapshot.playerBSurfaceElo * 0.65;
+
+  return createBenchmarkPredictionRow(
+    snapshot,
+    "blended-elo-baseline",
+    "benchmark",
+    eloProbability(playerABlended, playerBBlended),
+    [
+      toPredictionFactor(
+        "surface_elo",
+        "Blended Elo (35% Overall / 65% Surface)",
+        roundMetric(playerABlended, 2),
+        roundMetric(playerBBlended, 2),
+      ),
+    ],
+    rankingContext,
+  );
+}
+
+function createFullModelPredictionRow(
+  snapshot: HistoricalMatchFeatureSnapshot,
+  featureVersion: HistoricalMatchFeatureSnapshot["featureVersion"],
+  rankingContext: RankingContext,
+) {
+  const variantSnapshot = {
+    ...snapshot,
+    featureVersion,
+  };
+  const prediction = generatePredictionFromFeatureSnapshot(variantSnapshot);
+
+  return createBenchmarkPredictionRow(
+    snapshot,
+    prediction.modelVersion,
+    "full_model",
+    prediction.playerAWinProbability,
+    prediction.explanation,
+    rankingContext,
+  );
+}
+
+function comparisonBestByMetric(rows: ComparisonOverviewRow[]) {
+  const accuracyLeader = [...rows].sort((left, right) => right.accuracy - left.accuracy)[0];
+  const logLossLeader = [...rows].sort((left, right) => left.logLoss - right.logLoss)[0];
+  const brierLeader = [...rows].sort((left, right) => left.brierScore - right.brierScore)[0];
+  const calibrationLeader = [...rows].sort(
+    (left, right) => left.calibrationError - right.calibrationError,
+  )[0];
+
+  return {
+    accuracy: accuracyLeader?.modelVersion ?? "n/a",
+    logLoss: logLossLeader?.modelVersion ?? "n/a",
+    brierScore: brierLeader?.modelVersion ?? "n/a",
+    calibrationError: calibrationLeader?.modelVersion ?? "n/a",
+  };
+}
+
+function buildComparisonOverview(rowsByModel: Map<string, BacktestPredictionRow[]>) {
+  return [...rowsByModel.entries()]
+    .map(([modelVersion, rows]) => ({
+      modelVersion,
+      modelFamily: rows[0]?.model_family ?? "benchmark",
+      matchCount: rows.length,
+      accuracy: roundMetric(average(rows.map((row) => row.favorite_won))),
+      logLoss: roundMetric(average(rows.map((row) => row.log_loss))),
+      brierScore: roundMetric(average(rows.map((row) => row.brier_score))),
+      calibrationError: expectedCalibrationError(rows),
+      averageConfidence: roundMetric(average(rows.map((row) => row.confidence))),
+      averageFavoriteWinProbability: roundMetric(
+        average(rows.map((row) => row.favorite_win_probability)),
+      ),
+      favoriteWinRate: roundMetric(average(rows.map((row) => row.favorite_won))),
+    }))
+    .sort((left, right) => {
+      if (left.modelFamily !== right.modelFamily) {
+        return left.modelFamily.localeCompare(right.modelFamily);
+      }
+      return left.modelVersion.localeCompare(right.modelVersion);
+    });
+}
+
+function buildMarkdownReport(
+  summary: BacktestSummary,
+  primaryRows: BacktestPredictionRow[],
+) {
+  const topComparisons = summary.comparisonOverview
+    .map(
+      (row) =>
+        `| ${row.modelVersion} | ${row.modelFamily} | ${row.accuracy} | ${row.logLoss} | ${row.brierScore} | ${row.calibrationError} | ${row.matchCount} |`,
+    )
+    .join("\n");
+
+  const surfaceRows = summary.bySurface
+    .map(
+      (row) =>
+        `| ${row.segment} | ${row.matchCount} | ${row.accuracy} | ${row.logLoss} | ${row.brierScore} |`,
+    )
+    .join("\n");
+
+  return `# Sports Edge Model Evaluation\n
+Generated: ${summary.generatedAt}
+Primary model: ${summary.modelVersion}
+Sample: ${primaryRows.length} ATP matches from ${summary.dateRange.from ?? "unknown"} to ${summary.dateRange.to ?? "unknown"}
+
+## Comparison Overview
+
+| Model | Family | Accuracy | Log Loss | Brier | Calibration Error | Matches |
+| --- | --- | --- | --- | --- | --- | --- |
+${topComparisons}
+
+Best by accuracy: ${summary.comparisonBestByMetric.accuracy}
+Best by log loss: ${summary.comparisonBestByMetric.logLoss}
+Best by Brier: ${summary.comparisonBestByMetric.brierScore}
+Best by calibration error: ${summary.comparisonBestByMetric.calibrationError}
+
+## Primary Model Surface Split
+
+| Surface | Matches | Accuracy | Log Loss | Brier |
+| --- | --- | --- | --- | --- |
+${surfaceRows}
+
+## Notes
+
+${summary.notes.map((note) => `- ${note}`).join("\n")}
+`;
+}
+
+export async function computeBaselineBacktest() {
+  const [snapshots, historicalDataset] = await Promise.all([
+    readJsonLines<HistoricalFeatureRow>(path.join(FEATURES_DIR, "historical_match_features.jsonl")),
+    loadActiveHistoricalDataset(),
+  ]);
+
+  const sortedSnapshots = snapshots
+    .map(mapHistoricalFeatureRow)
+    .sort((left, right) => {
+      const byDate = left.matchDate.localeCompare(right.matchDate);
+      if (byDate !== 0) {
+        return byDate;
+      }
+
+      return left.matchId.localeCompare(right.matchId);
+    });
+
+  const rankingByMatchPlayer = new Map(
+    historicalDataset.matchEntries.map((entry) => [
+      `${entry.match_id}:${entry.player_id}`,
+      entry.ranking_at_match,
+    ]),
+  );
+
+  const rowsByModel = new Map<string, BacktestPredictionRow[]>();
+  const featureVersions: HistoricalMatchFeatureSnapshot["featureVersion"][] = [
+    "baseline-features-v1",
+    "baseline-features-v2",
+    "baseline-features-v3",
+  ];
+
+  for (const snapshot of sortedSnapshots) {
+    const rankingContext: RankingContext = {
+      playerARankAtMatch:
+        rankingByMatchPlayer.get(`${snapshot.matchId}:${snapshot.playerAId}`) ?? null,
+      playerBRankAtMatch:
+        rankingByMatchPlayer.get(`${snapshot.matchId}:${snapshot.playerBId}`) ?? null,
+    };
+
+    for (const featureVersion of featureVersions) {
+      const row = createFullModelPredictionRow(snapshot, featureVersion, rankingContext);
+      rowsByModel.set(row.model_version, [...(rowsByModel.get(row.model_version) ?? []), row]);
+    }
+
+    for (const row of [
+      createRankingBaselinePrediction(snapshot, rankingContext),
+      createOverallEloBaselinePrediction(snapshot, rankingContext),
+      createSurfaceEloBaselinePrediction(snapshot, rankingContext),
+      createBlendedEloBaselinePrediction(snapshot, rankingContext),
+    ]) {
+      rowsByModel.set(row.model_version, [...(rowsByModel.get(row.model_version) ?? []), row]);
+    }
+  }
+
+  const primaryModelVersion = createFullModelPredictionRow(
+    sortedSnapshots[0],
+    sortedSnapshots[0]?.featureVersion ?? "baseline-features-v3",
+    {
+      playerARankAtMatch:
+        rankingByMatchPlayer.get(`${sortedSnapshots[0]?.matchId}:${sortedSnapshots[0]?.playerAId}`) ??
+        null,
+      playerBRankAtMatch:
+        rankingByMatchPlayer.get(`${sortedSnapshots[0]?.matchId}:${sortedSnapshots[0]?.playerBId}`) ??
+        null,
+    },
+  ).model_version;
+  const primaryRows = rowsByModel.get(primaryModelVersion) ?? [];
+  const outputDir = path.join(OUTPUT_ROOT_DIR, primaryModelVersion);
+  const allRows = [...rowsByModel.values()].flat();
 
   await mkdir(outputDir, { recursive: true });
   for (const fileName of [
     "historical_predictions.jsonl",
+    "comparison_predictions.jsonl",
     "summary.json",
     "calibration.json",
     "by_surface.json",
     "by_tournament_level.json",
+    "by_best_of.json",
+    "by_ranking_gap_bucket.json",
+    "by_favorite_probability_bucket.json",
+    "by_season.json",
+    "comparison_overview.json",
+    "comparison_by_surface.json",
+    "comparison_by_tournament_level.json",
+    "comparison_by_best_of.json",
+    "report.md",
   ]) {
     await rm(path.join(outputDir, fileName), { force: true });
   }
 
-  const bySurface = Array.from(new Set(predictionRows.map((row) => row.surface)))
-    .sort()
-    .map((surface) => summarizeSegment(surface, predictionRows.filter((row) => row.surface === surface)));
-
-  const byTournamentLevel = Array.from(new Set(predictionRows.map((row) => row.tournament_level)))
-    .sort()
-    .map((level) =>
-      summarizeSegment(
-        level,
-        predictionRows.filter((row) => row.tournament_level === level),
-      ),
-    );
+  const bySurface = buildSegmentSummaries(primaryRows, (row) => row.surface, [
+    "clay",
+    "grass",
+    "hard",
+  ]);
+  const byTournamentLevel = buildSegmentSummaries(primaryRows, (row) => row.tournament_level, [
+    "grand_slam",
+    "masters",
+    "atp_500",
+    "atp_250",
+    "finals",
+    "team_event",
+    "olympics",
+    "challenger",
+    "tour",
+  ]);
+  const byBestOf = buildSegmentSummaries(primaryRows, (row) => `best_of_${row.best_of}`, [
+    "best_of_3",
+    "best_of_5",
+  ]);
+  const byRankingGapBucket = buildSegmentSummaries(primaryRows, (row) => row.ranking_gap_bucket, [
+    "0-10",
+    "11-25",
+    "26-50",
+    "51-100",
+    "100+",
+    "unknown",
+  ]);
+  const byFavoriteProbabilityBucket = buildSegmentSummaries(
+    primaryRows,
+    (row) => row.favorite_probability_bucket,
+  );
+  const bySeason = buildSegmentSummaries(primaryRows, (row) => row.season);
+  const comparisonOverview = buildComparisonOverview(rowsByModel);
 
   const summary: BacktestSummary = {
-    modelVersion,
+    modelVersion: primaryModelVersion,
     generatedAt: new Date().toISOString(),
-    matchCount: predictionRows.length,
+    matchCount: primaryRows.length,
     dateRange: {
-      from: predictionRows[0]?.match_date ?? null,
-      to: predictionRows.at(-1)?.match_date ?? null,
+      from: primaryRows[0]?.match_date ?? null,
+      to: primaryRows.at(-1)?.match_date ?? null,
     },
     overall: {
-      accuracy: roundMetric(average(predictionRows.map((row) => row.favorite_won))),
-      logLoss: roundMetric(average(predictionRows.map((row) => row.log_loss))),
-      brierScore: roundMetric(average(predictionRows.map((row) => row.brier_score))),
-      averageConfidence: roundMetric(average(predictionRows.map((row) => row.confidence))),
+      accuracy: roundMetric(average(primaryRows.map((row) => row.favorite_won))),
+      logLoss: roundMetric(average(primaryRows.map((row) => row.log_loss))),
+      brierScore: roundMetric(average(primaryRows.map((row) => row.brier_score))),
+      calibrationError: expectedCalibrationError(primaryRows),
+      averageConfidence: roundMetric(average(primaryRows.map((row) => row.confidence))),
       averageFavoriteWinProbability: roundMetric(
-        average(predictionRows.map((row) => row.favorite_win_probability)),
+        average(primaryRows.map((row) => row.favorite_win_probability)),
       ),
-      favoriteWinRate: roundMetric(average(predictionRows.map((row) => row.favorite_won))),
+      favoriteWinRate: roundMetric(average(primaryRows.map((row) => row.favorite_won))),
     },
-    calibrationBuckets: buildCalibrationBuckets(predictionRows),
+    calibrationBuckets: buildCalibrationBuckets(primaryRows),
     bySurface,
     byTournamentLevel,
+    byBestOf,
+    byRankingGapBucket,
+    byFavoriteProbabilityBucket,
+    bySeason,
+    comparisonOverview,
+    comparisonBestByMetric: comparisonBestByMetric(comparisonOverview),
+    notes: [
+      "Benchmark comparisons now score the full model and simpler alternatives on the exact same historical ATP matches.",
+      "Ranking baseline probabilities use a naive logistic transform of rank gap and should be treated as a benchmark, not a production probability model.",
+      "Historical evaluation currently covers main-draw ATP matches only, so qualifying-vs-main-draw splits are not yet available.",
+      "Market-favorite benchmarking is still pending an odds source.",
+      "Projected sets/games validation is not included in this report yet and should be evaluated separately before being trusted in-product.",
+    ],
   };
 
+  const comparisonBySurface = buildSegmentComparison(allRows, (row) => row.surface, [
+    "clay",
+    "grass",
+    "hard",
+  ]);
+  const comparisonByTournamentLevel = buildSegmentComparison(
+    allRows,
+    (row) => row.tournament_level,
+    ["grand_slam", "masters", "atp_500", "atp_250", "finals", "team_event", "olympics", "challenger", "tour"],
+  );
+  const comparisonByBestOf = buildSegmentComparison(allRows, (row) => `best_of_${row.best_of}`, [
+    "best_of_3",
+    "best_of_5",
+  ]);
+
   await Promise.all([
-    writeJsonLines(path.join(outputDir, "historical_predictions.jsonl"), predictionRows),
+    writeJsonLines(path.join(outputDir, "historical_predictions.jsonl"), primaryRows),
+    writeJsonLines(path.join(outputDir, "comparison_predictions.jsonl"), allRows),
     writeFile(path.join(outputDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8"),
     writeFile(
       path.join(outputDir, "calibration.json"),
@@ -356,6 +918,39 @@ export async function computeBaselineBacktest() {
       `${JSON.stringify(byTournamentLevel, null, 2)}\n`,
       "utf8",
     ),
+    writeFile(path.join(outputDir, "by_best_of.json"), `${JSON.stringify(byBestOf, null, 2)}\n`, "utf8"),
+    writeFile(
+      path.join(outputDir, "by_ranking_gap_bucket.json"),
+      `${JSON.stringify(byRankingGapBucket, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      path.join(outputDir, "by_favorite_probability_bucket.json"),
+      `${JSON.stringify(byFavoriteProbabilityBucket, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(path.join(outputDir, "by_season.json"), `${JSON.stringify(bySeason, null, 2)}\n`, "utf8"),
+    writeFile(
+      path.join(outputDir, "comparison_overview.json"),
+      `${JSON.stringify(comparisonOverview, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      path.join(outputDir, "comparison_by_surface.json"),
+      `${JSON.stringify(comparisonBySurface, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      path.join(outputDir, "comparison_by_tournament_level.json"),
+      `${JSON.stringify(comparisonByTournamentLevel, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      path.join(outputDir, "comparison_by_best_of.json"),
+      `${JSON.stringify(comparisonByBestOf, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(path.join(outputDir, "report.md"), `${buildMarkdownReport(summary, primaryRows)}\n`, "utf8"),
   ]);
 
   return summary;

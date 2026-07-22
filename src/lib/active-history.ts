@@ -45,6 +45,14 @@ export type ActivePlayerMatchStat = {
   return_points_won_pct: number | null;
 };
 
+export type ActiveMatchEntry = {
+  match_id: string;
+  player_id: string;
+  side: "A" | "B";
+  ranking_at_match: number | null;
+  ranking_points_at_match: number | null;
+};
+
 async function readJsonLines<T>(filePath: string): Promise<T[]> {
   const content = await readFile(filePath, "utf8");
   return content
@@ -100,27 +108,31 @@ export async function loadActiveHistoricalDataset() {
   const tournamentsPath = path.join(ACTIVE_DIR, "tournaments.jsonl");
   const matchesPath = path.join(ACTIVE_DIR, "matches.jsonl");
   const playerMatchStatsPath = path.join(ACTIVE_DIR, "player_match_stats.jsonl");
+  const matchEntriesPath = path.join(ACTIVE_DIR, "match_entries.jsonl");
 
   if (
     (await fileExists(tournamentsPath)) &&
     (await fileExists(matchesPath)) &&
-    (await fileExists(playerMatchStatsPath))
+    (await fileExists(playerMatchStatsPath)) &&
+    (await fileExists(matchEntriesPath))
   ) {
-    const [tournaments, matches, playerMatchStats] = await Promise.all([
+    const [tournaments, matches, playerMatchStats, matchEntries] = await Promise.all([
       readJsonLines<ActiveTournament>(tournamentsPath),
       readJsonLines<ActiveMatch>(matchesPath),
       readJsonLines<ActivePlayerMatchStat>(playerMatchStatsPath),
+      readJsonLines<ActiveMatchEntry>(matchEntriesPath),
     ]);
 
     return {
       tournaments,
       matches,
       playerMatchStats,
+      matchEntries,
       source: "local" as const,
     };
   }
 
-  const [tournaments, matches, playerMatchStats] = await Promise.all([
+  const [tournaments, matches, playerMatchStats, matchEntries] = await Promise.all([
     fetchAllRows<ActiveTournament>(
       "tournaments",
       "id, external_tournament_id, name, season, surface, level, start_date",
@@ -133,12 +145,17 @@ export async function loadActiveHistoricalDataset() {
       "player_match_stats",
       "match_id, player_id, service_points_won_pct, return_points_won_pct",
     ),
+    fetchAllRows<ActiveMatchEntry>(
+      "match_entries",
+      "match_id, player_id, side, ranking_at_match, ranking_points_at_match",
+    ),
   ]);
 
   return {
     tournaments,
     matches,
     playerMatchStats,
+    matchEntries,
     source: "supabase" as const,
   };
 }
