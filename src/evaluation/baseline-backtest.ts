@@ -55,7 +55,7 @@ type HistoricalFeatureRow = {
   player_a_h2h_edge: number;
 };
 
-type ModelFamily = "full_model" | "benchmark";
+type ModelFamily = "full_model" | "benchmark" | "ablation";
 
 type RankingContext = {
   playerARankAtMatch: number | null;
@@ -136,6 +136,21 @@ type SegmentComparison = {
   rows: SegmentComparisonRow[];
 };
 
+type AblationSummaryRow = {
+  omittedFactor: PredictionFactor["key"];
+  omittedLabel: string;
+  matchCount: number;
+  accuracy: number;
+  logLoss: number;
+  brierScore: number;
+  calibrationError: number;
+  averageConfidence: number;
+  accuracyDeltaVsPrimary: number;
+  logLossDeltaVsPrimary: number;
+  brierDeltaVsPrimary: number;
+  calibrationDeltaVsPrimary: number;
+};
+
 export type BacktestSummary = {
   modelVersion: string;
   generatedAt: string;
@@ -167,6 +182,7 @@ export type BacktestSummary = {
     brierScore: string;
     calibrationError: string;
   };
+  ablationOverview: AblationSummaryRow[];
   notes: string[];
 };
 
@@ -655,6 +671,109 @@ function comparisonBestByMetric(rows: ComparisonOverviewRow[]) {
   };
 }
 
+function probabilityFromScore(score: number) {
+  return 1 / (1 + Math.exp(-score));
+}
+
+function ablationLabelForFactor(key: PredictionFactor["key"]) {
+  switch (key) {
+    case "overall_elo":
+      return "Overall Elo";
+    case "surface_elo":
+      return "Surface Elo";
+    case "recent_form":
+      return "Recent Form";
+    case "surface_recent_form":
+      return "Surface Recent Form";
+    case "surface_service_points_won":
+      return "Surface Service Strength";
+    case "surface_return_points_won":
+      return "Surface Return Strength";
+    case "opponent_quality":
+      return "Opponent Quality";
+    case "surface_win_rate":
+      return "Surface Win Rate";
+    case "rest_days":
+      return "Rest Days";
+    case "head_to_head":
+      return "Head-to-Head";
+  }
+}
+
+function buildAblationOverview(
+  primaryRows: BacktestPredictionRow[],
+  primarySnapshots: HistoricalMatchFeatureSnapshot[],
+) {
+  const primaryByMatchId = new Map(primaryRows.map((row) => [row.match_id, row]));
+  const factorLabels = new Map<PredictionFactor["key"], string>();
+
+  for (const snapshot of primarySnapshots) {
+    const prediction = generatePredictionFromFeatureSnapshot(snapshot);
+    for (const factor of prediction.explanation) {
+      if (!factorLabels.has(factor.key)) {
+        factorLabels.set(factor.key, factor.label);
+      }
+    }
+  }
+
+  const primaryAccuracy = average(primaryRows.map((row) => row.favorite_won));
+  const primaryLogLoss = average(primaryRows.map((row) => row.log_loss));
+  const primaryBrier = average(primaryRows.map((row) => row.brier_score));
+  const primaryCalibration = expectedCalibrationError(primaryRows);
+
+  return [...factorLabels.keys()]
+    .map((factorKey) => {
+      const ablatedRows = primarySnapshots.map((snapshot) => {
+        const prediction = generatePredictionFromFeatureSnapshot(snapshot);
+        const ablatedExplanation = prediction.explanation.filter((factor) => factor.key !== factorKey);
+        const ablatedScore = ablatedExplanation.reduce((sum, factor) => sum + factor.edgeToPlayerA, 0);
+        const playerAWinProbability = clampProbability(probabilityFromScore(ablatedScore));
+
+        return createBenchmarkPredictionRow(
+          snapshot,
+          `ablation-without-${factorKey}`,
+          "ablation",
+          playerAWinProbability,
+          ablatedExplanation,
+          {
+            playerARankAtMatch:
+              primaryByMatchId.get(snapshot.matchId)?.player_a_rank_at_match ?? null,
+            playerBRankAtMatch:
+              primaryByMatchId.get(snapshot.matchId)?.player_b_rank_at_match ?? null,
+          },
+        );
+      });
+
+      const accuracy = roundMetric(average(ablatedRows.map((row) => row.favorite_won)));
+      const logLoss = roundMetric(average(ablatedRows.map((row) => row.log_loss)));
+      const brierScore = roundMetric(average(ablatedRows.map((row) => row.brier_score)));
+      const calibrationError = expectedCalibrationError(ablatedRows);
+      const averageConfidence = roundMetric(average(ablatedRows.map((row) => row.confidence)));
+
+      return {
+        omittedFactor: factorKey,
+        omittedLabel: ablationLabelForFactor(factorKey),
+        matchCount: ablatedRows.length,
+        accuracy,
+        logLoss,
+        brierScore,
+        calibrationError,
+        averageConfidence,
+        accuracyDeltaVsPrimary: roundMetric(accuracy - primaryAccuracy, 5),
+        logLossDeltaVsPrimary: roundMetric(logLoss - primaryLogLoss, 5),
+        brierDeltaVsPrimary: roundMetric(brierScore - primaryBrier, 5),
+        calibrationDeltaVsPrimary: roundMetric(calibrationError - primaryCalibration, 5),
+      } satisfies AblationSummaryRow;
+    })
+    .sort((left, right) => {
+      if (left.logLossDeltaVsPrimary !== right.logLossDeltaVsPrimary) {
+        return right.logLossDeltaVsPrimary - left.logLossDeltaVsPrimary;
+      }
+
+      return right.accuracyDeltaVsPrimary - left.accuracyDeltaVsPrimary;
+    });
+}
+
 function buildComparisonOverview(rowsByModel: Map<string, BacktestPredictionRow[]>) {
   return [...rowsByModel.entries()]
     .map(([modelVersion, rows]) => ({
@@ -697,6 +816,13 @@ function buildMarkdownReport(
     )
     .join("\n");
 
+  const ablationRows = summary.ablationOverview
+    .map(
+      (row) =>
+        `| ${row.omittedLabel} | ${row.accuracy} | ${row.logLoss} | ${row.brierScore} | ${row.calibrationError} | ${row.accuracyDeltaVsPrimary} | ${row.logLossDeltaVsPrimary} |`,
+    )
+    .join("\n");
+
   return `# Sports Edge Model Evaluation\n
 Generated: ${summary.generatedAt}
 Primary model: ${summary.modelVersion}
@@ -718,6 +844,12 @@ Best by calibration error: ${summary.comparisonBestByMetric.calibrationError}
 | Surface | Matches | Accuracy | Log Loss | Brier |
 | --- | --- | --- | --- | --- |
 ${surfaceRows}
+
+## Primary Model Ablation
+
+| Omitted Factor | Accuracy | Log Loss | Brier | Calibration Error | Accuracy Delta | Log Loss Delta |
+| --- | --- | --- | --- | --- | --- | --- |
+${ablationRows}
 
 ## Notes
 
@@ -811,6 +943,7 @@ export async function computeBaselineBacktest() {
     "comparison_by_surface.json",
     "comparison_by_tournament_level.json",
     "comparison_by_best_of.json",
+    "ablation_overview.json",
     "report.md",
   ]) {
     await rm(path.join(outputDir, fileName), { force: true });
@@ -850,6 +983,11 @@ export async function computeBaselineBacktest() {
   );
   const bySeason = buildSegmentSummaries(primaryRows, (row) => row.season);
   const comparisonOverview = buildComparisonOverview(rowsByModel);
+  const primarySnapshots = sortedSnapshots.map((snapshot) => ({
+    ...snapshot,
+    featureVersion: "baseline-features-v3" as const,
+  }));
+  const ablationOverview = buildAblationOverview(primaryRows, primarySnapshots);
 
   const summary: BacktestSummary = {
     modelVersion: primaryModelVersion,
@@ -879,12 +1017,14 @@ export async function computeBaselineBacktest() {
     bySeason,
     comparisonOverview,
     comparisonBestByMetric: comparisonBestByMetric(comparisonOverview),
+    ablationOverview,
     notes: [
       "Benchmark comparisons now score the full model and simpler alternatives on the exact same historical ATP matches.",
       "Ranking baseline probabilities use a naive logistic transform of rank gap and should be treated as a benchmark, not a production probability model.",
       "Historical evaluation currently covers main-draw ATP matches only, so qualifying-vs-main-draw splits are not yet available.",
       "Market-favorite benchmarking is still pending an odds source.",
       "Projected sets/games validation is not included in this report yet and should be evaluated separately before being trusted in-product.",
+      "Ablation rows measure how baseline-v3 changes when a single scoring factor is removed across the same historical ATP sample.",
     ],
   };
 
@@ -948,6 +1088,11 @@ export async function computeBaselineBacktest() {
     writeFile(
       path.join(outputDir, "comparison_by_best_of.json"),
       `${JSON.stringify(comparisonByBestOf, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(
+      path.join(outputDir, "ablation_overview.json"),
+      `${JSON.stringify(ablationOverview, null, 2)}\n`,
       "utf8",
     ),
     writeFile(path.join(outputDir, "report.md"), `${buildMarkdownReport(summary, primaryRows)}\n`, "utf8"),
