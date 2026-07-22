@@ -51,6 +51,26 @@ const WEIGHT_PROFILES = {
     rest_days: 0,
     head_to_head: 0.005,
   },
+  "baseline-v5": {
+    overall_elo: 0.46,
+    surface_elo: 0.36,
+    recent_form: 0.015,
+    surface_recent_form: 0,
+    surface_service_points_won: 0,
+    surface_return_points_won: 0,
+    opponent_quality: 0.05,
+    surface_win_rate: 0,
+    rest_days: 0,
+    head_to_head: 0,
+  },
+} as const;
+
+const SCORE_MULTIPLIERS = {
+  "baseline-v1": 1,
+  "baseline-v2": 1,
+  "baseline-v3": 1,
+  "baseline-v4": 1,
+  "baseline-v5": 2.45,
 } as const;
 
 type ModelVersion = keyof typeof WEIGHT_PROFILES;
@@ -100,6 +120,8 @@ function makeFactor(
 
 function modelVersionFromSnapshot(snapshot: PreMatchFeatureSnapshot): ModelVersion {
   switch (snapshot.featureVersion) {
+    case "baseline-features-v5":
+      return "baseline-v5";
     case "baseline-features-v4":
       return "baseline-v4";
     case "baseline-features-v3":
@@ -252,7 +274,8 @@ export function generatePredictionFromFeatureSnapshot(
     );
   }
 
-  const score = explanation.reduce((total, factor) => total + factor.edgeToPlayerA, 0);
+  const rawScore = explanation.reduce((total, factor) => total + factor.edgeToPlayerA, 0);
+  const score = rawScore * SCORE_MULTIPLIERS[modelVersion];
   const playerAWinProbability = clamp(probabilityFromScore(score), 0.01, 0.99);
   const playerBWinProbability = 1 - playerAWinProbability;
   const confidence = clamp(Math.abs(playerAWinProbability - 0.5) * 2, 0, 1);
