@@ -18,6 +18,10 @@ function formatDate(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
+function isRapidApiRateLimitError(error: unknown) {
+  return error instanceof Error && error.message.includes("429");
+}
+
 async function main() {
   const today = new Date();
   const referenceDate = process.argv[2] ?? formatDate(today);
@@ -33,11 +37,58 @@ async function main() {
     referenceDate,
     lookbackDays: Number.isNaN(lookbackDays) ? 2 : lookbackDays,
   });
-  const syncSummary = await syncLiveUpcomingFeed(provider, referenceDate, dateTo);
-  const predictionSummary = await computeUpcomingMatchPredictions(
-    `${process.cwd()}/data/upcoming-matches/atp-upcoming.generated.json`,
-  );
-  const loadSummary = await loadUpcomingMatchPredictionsToSupabase();
+  let syncSummary:
+    | Awaited<ReturnType<typeof syncLiveUpcomingFeed>>
+    | {
+        provider: "matchstat-rapidapi";
+        dateFrom: string;
+        dateTo: string;
+        status: "rate_limited";
+        skippedPredictionRefresh: true;
+        message: string;
+      };
+  let predictionSummary:
+    | Awaited<ReturnType<typeof computeUpcomingMatchPredictions>>
+    | {
+        status: "skipped";
+        reason: "rapidapi_rate_limited";
+      };
+  let loadSummary:
+    | Awaited<ReturnType<typeof loadUpcomingMatchPredictionsToSupabase>>
+    | {
+        status: "skipped";
+        reason: "rapidapi_rate_limited";
+      };
+
+  try {
+    syncSummary = await syncLiveUpcomingFeed(provider, referenceDate, dateTo);
+    predictionSummary = await computeUpcomingMatchPredictions(
+      `${process.cwd()}/data/upcoming-matches/atp-upcoming.generated.json`,
+    );
+    loadSummary = await loadUpcomingMatchPredictionsToSupabase();
+  } catch (error) {
+    if (!isRapidApiRateLimitError(error)) {
+      throw error;
+    }
+
+    syncSummary = {
+      provider: "matchstat-rapidapi",
+      dateFrom: referenceDate,
+      dateTo,
+      status: "rate_limited",
+      skippedPredictionRefresh: true,
+      message:
+        "RapidAPI fixture quota was exhausted, so live sync and prediction refresh were skipped for this run.",
+    };
+    predictionSummary = {
+      status: "skipped",
+      reason: "rapidapi_rate_limited",
+    };
+    loadSummary = {
+      status: "skipped",
+      reason: "rapidapi_rate_limited",
+    };
+  }
 
   const summary = {
     referenceDate,
