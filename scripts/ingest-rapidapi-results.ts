@@ -10,8 +10,12 @@ function parseOption(name: string, fallback: string) {
   return argument ? argument.slice(name.length + 1) : fallback;
 }
 
+function formatDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
 async function main() {
-  const referenceDate = parseOption("--date", "2026-07-21");
+  const referenceDate = parseOption("--date", formatDate(new Date()));
   const lookbackDays = Number.parseInt(parseOption("--lookback-days", "2"), 10);
   const dryRun = parseFlag("--dry-run");
 

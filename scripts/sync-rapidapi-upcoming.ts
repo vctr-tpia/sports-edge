@@ -13,9 +13,11 @@ function formatDate(date: Date) {
 }
 
 async function main() {
-  const today = new Date("2026-07-21T00:00:00.000Z");
+  const today = new Date();
   const dateFrom = process.argv[2] ?? formatDate(today);
-  const dateTo = process.argv[3] ?? formatDate(addDays(today, 7));
+  const dateTo =
+    process.argv[3] ??
+    formatDate(addDays(new Date(`${dateFrom}T00:00:00.000Z`), 7));
 
   const provider = new MatchstatRapidApiProvider();
   const syncSummary = await syncLiveUpcomingFeed(provider, dateFrom, dateTo);

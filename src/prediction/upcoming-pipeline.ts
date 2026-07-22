@@ -10,6 +10,14 @@ import type {
 import type {
   PreMatchFeatureSnapshot,
 } from "@/src/domain/predictions/feature-snapshot";
+import {
+  loadActiveHistoricalDataset,
+  loadActivePlayers,
+  type ActiveMatch,
+  type ActivePlayer,
+  type ActivePlayerMatchStat,
+  type ActiveTournament,
+} from "@/src/lib/active-history";
 import { generatePredictionFromFeatureSnapshot } from "@/src/prediction/baseline-feature-model";
 import {
   applyMatchResult,
@@ -28,7 +36,6 @@ import {
   type PlayerFeatureState,
 } from "@/src/prediction/feature-state";
 
-const ACTIVE_DIR = path.join(process.cwd(), "work", "normalized", "active-atp");
 const OUTPUT_DIR = path.join(process.cwd(), "work", "upcoming", "atp");
 const GENERATED_INPUT_PATH = path.join(
   process.cwd(),
@@ -43,45 +50,6 @@ const SAMPLE_INPUT_PATH = path.join(
   "atp-upcoming.sample.json",
 );
 const FEATURE_VERSION = "baseline-features-v3";
-
-type LocalPlayer = {
-  id: string;
-  external_atp_id: string;
-  full_name: string;
-  country_code: string | null;
-};
-
-type NormalizedTournament = {
-  id: string;
-  external_tournament_id: string;
-  name: string;
-  season: number;
-  surface: Surface;
-  level: TournamentLevel;
-  source_level_code: string;
-  start_date: string | null;
-};
-
-type NormalizedMatch = {
-  id: string;
-  external_match_id: string;
-  tournament_id: string;
-  match_date: string;
-  round: MatchRound;
-  surface: Surface;
-  best_of: number | null;
-  winner_id: string;
-  loser_id: string;
-  score: string | null;
-  minutes: number | null;
-};
-
-type NormalizedPlayerMatchStat = {
-  match_id: string;
-  player_id: string;
-  service_points_won_pct: number | null;
-  return_points_won_pct: number | null;
-};
 
 type UpcomingSummary = {
   generatedAt: string;
@@ -122,13 +90,7 @@ async function resolveInputPath(inputPath?: string) {
 }
 
 async function hydrateHistoricalState() {
-  const tournaments = await readJsonLines<NormalizedTournament>(
-    path.join(ACTIVE_DIR, "tournaments.jsonl"),
-  );
-  const [matches, playerMatchStats] = await Promise.all([
-    readJsonLines<NormalizedMatch>(path.join(ACTIVE_DIR, "matches.jsonl")),
-    readJsonLines<NormalizedPlayerMatchStat>(path.join(ACTIVE_DIR, "player_match_stats.jsonl")),
-  ]);
+  const { tournaments, matches, playerMatchStats } = await loadActiveHistoricalDataset();
   const tournamentById = new Map(tournaments.map((tournament) => [tournament.id, tournament]));
   const playerMatchStatByKey = new Map(
     playerMatchStats.map((row) => [`${row.match_id}:${row.player_id}`, row]),
@@ -245,7 +207,7 @@ export async function computeUpcomingMatchPredictions(inputPath?: string) {
   const resolvedInputPath = await resolveInputPath(inputPath);
 
   const [players, rawFeed, historicalState] = await Promise.all([
-    readJsonLines<LocalPlayer>(path.join(ACTIVE_DIR, "players.jsonl")),
+    loadActivePlayers(),
     readFile(resolvedInputPath, "utf8").then((content) => JSON.parse(content) as UpcomingFeed),
     hydrateHistoricalState(),
   ]);

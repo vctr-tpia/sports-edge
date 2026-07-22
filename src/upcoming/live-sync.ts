@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getSupabaseAdminClient } from "@/src/lib/supabase-admin";
+import { loadActivePlayers, type ActivePlayer } from "@/src/lib/active-history";
 import {
   initialsMatch,
   normalizePersonName,
@@ -9,8 +10,6 @@ import {
 import type { UpcomingFeed, UpcomingTournamentInput } from "@/src/domain/upcoming";
 import type { TournamentLevel } from "@/src/domain/shared";
 import type { ProviderScheduledMatch, TennisScheduleProvider } from "@/src/data/providers/tennis-provider";
-
-const ACTIVE_DIR = path.join(process.cwd(), "work", "normalized", "active-atp");
 const OVERRIDES_PATH = path.join(
   process.cwd(),
   "data",
@@ -24,13 +23,6 @@ const GENERATED_FEED_PATH = path.join(
   "atp-upcoming.generated.json",
 );
 const OUTPUT_DIR = path.join(process.cwd(), "work", "upcoming", "atp");
-
-type LocalPlayer = {
-  id: string;
-  external_atp_id: string;
-  full_name: string;
-  country_code: string | null;
-};
 
 type PlayerExternalIdRow = {
   provider: string;
@@ -135,10 +127,10 @@ function overrideKey(provider: string, providerName: string, providerCountryCode
 }
 
 function choosePlayerMatch(
-  candidates: LocalPlayer[],
+  candidates: ActivePlayer[],
   providerName: string,
   providerCountryCode: string | null,
-): LocalPlayer | null {
+): ActivePlayer | null {
   const normalizedName = normalizePersonName(providerName);
   const providerTokens = normalizedNameTokens(providerName);
   const exactNameMatches = candidates.filter(
@@ -220,7 +212,7 @@ export async function syncLiveUpcomingFeed(
   await mkdir(OUTPUT_DIR, { recursive: true });
 
   const [localPlayers, providerMatches, overrideConfig] = await Promise.all([
-    readJsonLines<LocalPlayer>(path.join(ACTIVE_DIR, "players.jsonl")),
+    loadActivePlayers(),
     provider.fetchScheduledMatches(dateFrom, dateTo),
     readFile(OVERRIDES_PATH, "utf8").then((content) => JSON.parse(content) as OverrideConfig),
   ]);
@@ -244,7 +236,7 @@ export async function syncLiveUpcomingFeed(
     ]),
   );
 
-  const playerNameCandidates = new Map<string, LocalPlayer[]>();
+  const playerNameCandidates = new Map<string, ActivePlayer[]>();
   for (const player of localPlayers) {
     const key = normalizePersonName(player.full_name);
     playerNameCandidates.set(key, [...(playerNameCandidates.get(key) ?? []), player]);

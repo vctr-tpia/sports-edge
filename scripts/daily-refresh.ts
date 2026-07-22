@@ -19,11 +19,13 @@ function formatDate(date: Date) {
 }
 
 async function main() {
-  const today = new Date("2026-07-21T00:00:00.000Z");
+  const today = new Date();
   const referenceDate = process.argv[2] ?? formatDate(today);
   const syncWindowDays = Number.parseInt(process.argv[3] ?? "7", 10);
   const lookbackDays = Number.parseInt(process.argv[4] ?? "2", 10);
-  const dateTo = formatDate(addDays(today, Number.isNaN(syncWindowDays) ? 7 : syncWindowDays));
+  const dateTo = formatDate(
+    addDays(new Date(`${referenceDate}T00:00:00.000Z`), Number.isNaN(syncWindowDays) ? 7 : syncWindowDays),
+  );
 
   const provider = new MatchstatRapidApiProvider();
   const settlementSummary = await ingestRecentMatchResults({

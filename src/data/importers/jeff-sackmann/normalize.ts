@@ -24,7 +24,6 @@ export const DEFAULT_SACKMANN_SOURCE_DIR = path.join(
 );
 
 const ACTIVE_WINDOW_YEARS = 10;
-const ACTIVE_REFERENCE_DATE = "2026-07-21";
 
 type StagedMatchRecord = {
   external_match_id: string;
@@ -146,6 +145,10 @@ function subtractYears(dateString: string, years: number) {
   const date = new Date(`${dateString}T00:00:00Z`);
   date.setUTCFullYear(date.getUTCFullYear() - years);
   return date.toISOString().slice(0, 10);
+}
+
+function getActiveReferenceDate() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function mapSurface(value: string | null): Surface | null {
@@ -290,6 +293,8 @@ export async function prepareActiveHistoryNormalization(
   outputDir = DEFAULT_NORMALIZED_OUTPUT_DIR,
   sourceDir = DEFAULT_SACKMANN_SOURCE_DIR,
 ): Promise<NormalizationSummary> {
+  const activeReferenceDate = getActiveReferenceDate();
+
   await mkdir(outputDir, { recursive: true });
   for (const name of [
     "players.jsonl",
@@ -302,7 +307,7 @@ export async function prepareActiveHistoryNormalization(
     await rm(path.join(outputDir, name), { force: true });
   }
 
-  const cutoffDate = subtractYears(ACTIVE_REFERENCE_DATE, ACTIVE_WINDOW_YEARS);
+  const cutoffDate = subtractYears(activeReferenceDate, ACTIVE_WINDOW_YEARS);
   const [stagedPlayers, stagedMatches, rankedPlayerIds] = await Promise.all([
     readJsonLines<StagedPlayerRecord>(path.join(stagingDir, "players.jsonl")),
     readJsonLines<StagedMatchRecord>(path.join(stagingDir, "matches_main_draw.jsonl")),
@@ -420,7 +425,7 @@ export async function prepareActiveHistoryNormalization(
   );
 
   const summary: NormalizationSummary = {
-    referenceDate: ACTIVE_REFERENCE_DATE,
+    referenceDate: activeReferenceDate,
     cutoffDate,
     players: players.length,
     supplementalRankedPlayers: [...rankedPlayerIds].filter(
