@@ -1,16 +1,24 @@
-import { FeaturePill } from "@/components/feature-pill";
-import { PredictionCard } from "@/components/prediction-card";
-import { SectionCard } from "@/components/section-card";
-import { generatePredictionFromFeatureSnapshot } from "@/src/prediction/baseline-feature-model";
-import {
-  getHistoricalFeatureSnapshots,
-  getLocalPlayersById,
-  getLocalTournamentsById,
-  getUpcomingPredictionSnapshots,
-  getUpcomingPredictionSummary,
-} from "@/src/lib/local-data";
+import Link from "next/link";
+import { AppShell } from "@/components/layout/app-shell";
+import { PageHeader } from "@/components/layout/page-header";
+import { FactorRow } from "@/components/analysis/factor-row";
+import { MatchCard } from "@/components/matches/match-card";
+import { ConfidenceBadge } from "@/components/predictions/confidence-badge";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { MetricCard } from "@/components/ui/metric-card";
+import { ProgressBar } from "@/components/ui/progress-bar";
+import { getOverviewViewModel } from "@/src/lib/app-view-models";
 
-function formatSyncStamp(value: string) {
+function sentenceCase(value: string) {
+  return value
+    .split("_")
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
+}
+
+function formatGeneratedAt(value: string) {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
@@ -22,209 +30,201 @@ function formatSyncStamp(value: string) {
 }
 
 export default async function HomePage() {
-  const [playersById, tournamentsById, snapshots, upcomingRows, upcomingSummary] = await Promise.all([
-    getLocalPlayersById(),
-    getLocalTournamentsById(),
-    getHistoricalFeatureSnapshots(8),
-    getUpcomingPredictionSnapshots(16),
-    getUpcomingPredictionSummary(),
-  ]);
-
-  const scoredSnapshots = snapshots.map((snapshot) => {
-    const playerA = playersById.get(snapshot.playerAId);
-    const playerB = playersById.get(snapshot.playerBId);
-    const actualWinner = playersById.get(snapshot.actualWinnerId);
-    const tournament = tournamentsById.get(snapshot.tournamentId);
-
-    return {
-      snapshot,
-      prediction: generatePredictionFromFeatureSnapshot(snapshot),
-      playerAName: playerA?.full_name ?? snapshot.playerAId,
-      playerBName: playerB?.full_name ?? snapshot.playerBId,
-      actualWinnerName: actualWinner?.full_name ?? snapshot.actualWinnerId,
-      tournamentName: tournament?.name ?? snapshot.tournamentId,
-    };
-  });
-
-  const upcomingPredictions = upcomingRows.map(({ match, snapshot, prediction }) => {
-    const playerA = playersById.get(snapshot.playerAId);
-    const playerB = playersById.get(snapshot.playerBId);
-
-    return {
-      snapshot,
-      prediction,
-      match,
-      tournamentName: match.tournament_name,
-      playerAName: playerA?.full_name ?? snapshot.playerAId,
-      playerBName: playerB?.full_name ?? snapshot.playerBId,
-    };
-  });
-  const featuredUpcomingPredictions = [...upcomingPredictions]
-    .sort((left, right) => right.prediction.confidence - left.prediction.confidence)
-    .slice(0, 8);
+  const overview = await getOverviewViewModel();
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-7xl flex-col px-6 py-8 sm:px-10 lg:px-12">
-      <div className="bg-grid bg-[size:28px_28px]">
-        <section className="grid gap-8 py-10 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="rounded-[2rem] border border-ink/10 bg-white/92 p-8 shadow-card lg:p-10">
-            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-ink/45">
-              Sports Edge
-            </p>
-            <h1 className="mt-4 max-w-3xl text-5xl font-semibold tracking-tight text-ink">
-              ATP match predictions you can actually read.
-            </h1>
-            <p className="mt-5 max-w-2xl text-lg leading-8 text-ink/72">
-              This screen answers one question: who is favored, by how much, and why. We only
-              show live ATP matches we can map safely into our own ratings and match history.
-            </p>
-            <div className="mt-7 flex flex-wrap gap-3">
-              <FeaturePill label="Live ATP feed" value="RapidAPI" tone="positive" />
-                <FeaturePill label="Upcoming matches" value={String(upcomingSummary.upcomingMatchCount)} />
-                <FeaturePill label="Backtested examples" value={String(scoredSnapshots.length)} />
-            </div>
-          </div>
+    <AppShell breadcrumbs={[{ label: "Overview" }]} freshnessLabel={overview.freshnessLabel}>
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Sports Edge"
+          title="ATP predictions with context, disagreement, and model accountability."
+          description="The overview is built to answer three questions quickly: which ATP matches are live in our pipeline, who the model favors, and why that advantage exists without overstating certainty."
+          actionHref="/matches"
+          actionLabel="Browse matches"
+        />
 
-          <SectionCard eyebrow="How To Read This" title="What the numbers mean">
-            <div className="space-y-3">
-              <p>
-                The percentage is the model’s win probability for each player before the match starts.
-              </p>
-              <p>
-                Confidence shows how strong the gap is between the two players, not whether the pick is guaranteed.
-              </p>
-              <p>
-                The reason cards show the biggest factors behind the lean, using the actual players’ numbers.
-              </p>
-            </div>
-          </SectionCard>
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {overview.metricCards.map((metric) => (
+            <MetricCard
+              key={metric.label}
+              label={metric.label}
+              value={metric.value}
+              detail={metric.detail}
+            />
+          ))}
         </section>
 
-        <div className="pb-14">
-          <div className="mb-6 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-            <section className="rounded-[2rem] border border-ink/10 bg-white/90 p-8 shadow-card">
-              <div className="flex flex-wrap items-center gap-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/45">
-                  Live Feed
-                </p>
-                <span className="rounded-full bg-clay/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-clay">
-                  RapidAPI ATP Sync
-                </span>
-              </div>
-              <h2 className="mt-3 text-3xl font-semibold tracking-tight text-ink">
-                Upcoming ATP predictions from the live schedule pipeline
-              </h2>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-ink/70">
-                These matches come from the live RapidAPI ATP feed, then run through our own
-                identity mapping, ATP-only scope rules, and the same explainable baseline model
-                we use for backtests, including surface Elo, form, and recent serve/return strength.
-              </p>
-              <div className="mt-6 flex flex-wrap gap-3">
-                <FeaturePill label="Source" value="matchstat-rapidapi" tone="positive" />
-                <FeaturePill
-                  label="Matches in feed"
-                  value={String(upcomingSummary.upcomingMatchCount)}
+        <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+          {overview.featuredMatch ? (
+            <Card elevated className="rounded-hero p-6 sm:p-8">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone="brand">Featured match</Badge>
+                    <Badge tone="neutral">
+                      {overview.featuredMatch.tournamentName}
+                    </Badge>
+                  </div>
+                  <h2 className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-ink sm:text-4xl">
+                    {overview.featuredMatch.playerA.name} vs {overview.featuredMatch.playerB.name}
+                  </h2>
+                  <p className="mt-3 text-sm leading-7 text-inkSecondary">
+                    {[overview.featuredMatch.surface, overview.featuredMatch.round]
+                      .filter(Boolean)
+                      .map((part) => sentenceCase(String(part)))
+                      .join(" • ")}
+                    {overview.featuredMatch.providerTimeLabel
+                      ? ` • ${overview.featuredMatch.providerTimeLabel}`
+                      : ""}
+                  </p>
+                </div>
+                <ConfidenceBadge
+                  label={overview.featuredMatch.confidenceLabel}
+                  score={overview.featuredMatch.confidenceScore}
                 />
-                <FeaturePill
-                  label="Tournaments"
-                  value={String(upcomingSummary.tournamentCount)}
+              </div>
+
+              <div className="mt-6">
+                <MatchCard match={overview.featuredMatch} compact />
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                {overview.featuredFactors.map((factor) => (
+                  <FactorRow
+                    key={factor.key}
+                    factor={factor}
+                    playerAName={overview.featuredMatch?.playerA.name ?? "Player A"}
+                    playerBName={overview.featuredMatch?.playerB.name ?? "Player B"}
+                  />
+                ))}
+              </div>
+            </Card>
+          ) : (
+            <EmptyState
+              title="No featured ATP match is available"
+              description="Upcoming fixtures have not been mapped into a prediction snapshot yet. The dashboard will populate after the next successful refresh."
+            />
+          )}
+
+          <div className="space-y-6">
+            <Card className="rounded-hero p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-inkMuted">
+                Confidence distribution
+              </p>
+              <h2 className="mt-3 text-2xl font-semibold text-ink">
+                How decisive today&apos;s slate looks
+              </h2>
+              <div className="mt-5 space-y-4">
+                {overview.confidenceDistribution.map((bucket) => {
+                  const total = Math.max(
+                    1,
+                    overview.confidenceDistribution.reduce(
+                      (sum, entry) => sum + entry.count,
+                      0,
+                    ),
+                  );
+
+                  return (
+                    <div key={bucket.label}>
+                      <div className="mb-2 flex items-center justify-between text-sm">
+                        <span className="text-inkSecondary">
+                          {sentenceCase(bucket.label)}
+                        </span>
+                        <span className="numeric text-ink">{bucket.count}</span>
+                      </div>
+                      <ProgressBar value={bucket.count / total} tone="brand" />
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+
+            <Card className="rounded-hero p-6">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-inkMuted">
+                System status
+              </p>
+              <h2 className="mt-3 text-2xl font-semibold text-ink">
+                Data freshness and MVP guardrails
+              </h2>
+              <div className="mt-5 space-y-4 text-sm leading-7 text-inkSecondary">
+                <p>
+                  Last ATP refresh:{" "}
+                  <span className="text-ink">
+                    {formatGeneratedAt(overview.generatedAt)}
+                  </span>
+                </p>
+                <p>
+                  Only ATP singles fixtures mapped confidently into our historical player pool are
+                  shown. Unknown identities stay excluded instead of being guessed into the model.
+                </p>
+                <p>
+                  Win probability is model-generated. Confidence describes separation between
+                  players, not certainty that a prediction will settle correctly.
+                </p>
+              </div>
+            </Card>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-inkMuted">
+                Today&apos;s predictions
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold text-ink">
+                Upcoming ATP matches in the current prediction window
+              </h2>
+            </div>
+            <Link
+              href="/predictions"
+              className="text-sm font-medium text-inkSecondary transition hover:text-ink"
+            >
+              View all predictions
+            </Link>
+          </div>
+          {overview.upcomingMatches.length > 0 ? (
+            <div className="grid gap-5 xl:grid-cols-2">
+              {overview.upcomingMatches.map((match) => (
+                <MatchCard key={match.matchId} match={match} compact />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="Predictions are waiting on the next refresh"
+              description="This view will fill once the upcoming ATP feed and feature snapshot pipeline complete successfully."
+            />
+          )}
+        </section>
+
+        <section className="space-y-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-inkMuted">
+              Model performance
+            </p>
+            <h2 className="mt-2 text-2xl font-semibold text-ink">
+              Recent benchmark context
+            </h2>
+          </div>
+          {overview.performanceHighlights.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-3">
+              {overview.performanceHighlights.map((metric) => (
+                <MetricCard
+                  key={metric.label}
+                  label={metric.label}
+                  value={metric.value}
+                  detail={metric.detail}
                 />
-              </div>
-            </section>
-
-            <SectionCard eyebrow="Sync Status" title="Live ATP guardrails">
-              <div className="space-y-3">
-                <p>
-                  Last sync: <strong className="text-ink">{formatSyncStamp(upcomingSummary.generatedAt)}</strong>
-                </p>
-                <p>
-                  Coverage window: <strong className="text-ink">{upcomingSummary.dateRange.from}</strong> to{" "}
-                  <strong className="text-ink">{upcomingSummary.dateRange.to}</strong>
-                </p>
-                <p>
-                  Only ATP singles matches are included. Live players are resolved through our
-                  ATP identity map, and unknown names stay excluded rather than being guessed into
-                  the model.
-                </p>
-              </div>
-            </SectionCard>
-          </div>
-
-          <div className="mb-6 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/45">
-                Upcoming ATP
-              </p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-tight text-ink">
-                Live scheduled matches with explainable win probabilities
-              </h2>
-              <p className="mt-2 max-w-3xl text-sm leading-7 text-ink/70">
-                Start here. These are the strongest live ATP leans the model can score right now.
-              </p>
+              ))}
             </div>
-            <div className="rounded-3xl border border-ink/10 bg-white/85 px-4 py-3 text-sm text-ink/70">
-              <strong className="text-ink">{featuredUpcomingPredictions.length}</strong> featured live matches
-            </div>
-          </div>
-
-          <div className="grid gap-6 pb-12">
-            {featuredUpcomingPredictions.map(({ match, snapshot, prediction, tournamentName, playerAName, playerBName }) => (
-              <PredictionCard
-                key={snapshot.matchId}
-                matchId={snapshot.matchId}
-                matchDate={snapshot.matchDate}
-                tournamentName={tournamentName}
-                scheduledAt={match.scheduled_at}
-                providerTimeLabel={match.provider_time_label}
-                city={match.city}
-                countryCode={match.country_code}
-                tournamentStartDate={match.tournament_start_date}
-                tournamentEndDate={match.tournament_end_date}
-                bestOf={match.best_of}
-                surface={snapshot.surface}
-                round={snapshot.round}
-                playerAName={playerAName}
-                playerBName={playerBName}
-                prediction={prediction}
-              />
-            ))}
-          </div>
-
-          <div className="mb-6 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-ink/45">
-                Prediction MVP
-              </p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-tight text-ink">
-                Recent backtested examples
-              </h2>
-              <p className="mt-2 max-w-3xl text-sm leading-7 text-ink/70">
-                These completed matches show how the same model looked before real ATP matches were played.
-              </p>
-            </div>
-            <div className="rounded-3xl border border-ink/10 bg-white/85 px-4 py-3 text-sm text-ink/70">
-              <strong className="text-ink">{scoredSnapshots.length}</strong> recent snapshots shown
-            </div>
-          </div>
-
-          <div className="grid gap-6">
-            {scoredSnapshots.map(({ snapshot, prediction, playerAName, playerBName, actualWinnerName, tournamentName }) => (
-              <PredictionCard
-                key={snapshot.matchId}
-                matchId={snapshot.matchId}
-                matchDate={snapshot.matchDate}
-                tournamentName={tournamentName}
-                surface={snapshot.surface}
-                round={snapshot.round}
-                playerAName={playerAName}
-                playerBName={playerBName}
-                actualWinnerName={actualWinnerName}
-                prediction={prediction}
-              />
-            ))}
-          </div>
-        </div>
+          ) : (
+            <EmptyState
+              title="Evaluation metrics are not available yet"
+              description="The overview only shows recent backtest performance when the internal evaluation tables are populated."
+            />
+          )}
+        </section>
       </div>
-    </main>
+    </AppShell>
   );
 }
