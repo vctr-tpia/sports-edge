@@ -90,6 +90,7 @@ export default async function ModelLabPage() {
     <AppShell
       breadcrumbs={[{ label: "Model Lab" }]}
       freshnessLabel={`Evaluation generated ${formatGeneratedAt(evaluation.generated_at)}`}
+      freshnessTone="neutral"
     >
       <div className="space-y-6">
         <PageHeader

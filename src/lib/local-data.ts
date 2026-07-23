@@ -62,6 +62,18 @@ async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(content) as T;
 }
 
+async function readOptionalJsonFile<T>(filePath: string): Promise<T | null> {
+  try {
+    return await readJsonFile<T>(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
 export async function getLocalPlayersById() {
   const players = await readJsonLines<LocalPlayer>(path.join(ACTIVE_DIR, "players.jsonl"));
   return new Map(players.map((player) => [player.id, player]));
@@ -307,6 +319,20 @@ export async function getUpcomingPredictionSummary() {
       to: string | null;
     };
   }>(path.join(UPCOMING_DIR, "summary.json"));
+}
+
+export async function getUpcomingRefreshHealth() {
+  return readOptionalJsonFile<{
+    generatedAt: string;
+    provider: string;
+    status: "healthy" | "warning" | "rate_limited";
+    message: string;
+    referenceDate: string;
+    dateTo: string;
+    syncStatus: string;
+    predictionStatus: string;
+    loadStatus: string;
+  }>(path.join(UPCOMING_DIR, "refresh-health.json"));
 }
 
 export async function getMatchDetailById(matchId: string): Promise<

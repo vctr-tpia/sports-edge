@@ -22,6 +22,7 @@
     "load:upcoming-matches": "tsx scripts/load-upcoming-match-predictions-to-supabase.ts",
     "sync:rapidapi-upcoming": "tsx scripts/sync-rapidapi-upcoming.ts",
     "ingest:rapidapi-results": "tsx scripts/ingest-rapidapi-results.ts",
+    "archive:settled-picks": "tsx scripts/archive-settled-picks.ts",
     "daily:refresh": "tsx scripts/daily-refresh.ts"
   },
   "dependencies": {

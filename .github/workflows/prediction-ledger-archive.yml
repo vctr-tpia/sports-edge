@@ -1,16 +1,16 @@
-name: ATP Results Settlement
+name: Prediction Ledger Archive
 
 on:
   schedule:
-    - cron: "20 */8 * * *"
+    - cron: "30 8 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: atp-live-ops
+  group: prediction-ledger-archive
   cancel-in-progress: false
 
 jobs:
-  settle:
+  archive:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,10 +26,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run results settlement sweep
-        run: npm run ingest:rapidapi-results
+      - name: Archive settled prediction picks
+        run: npm run archive:settled-picks
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          RAPIDAPI_TENNIS_KEY: ${{ secrets.RAPIDAPI_TENNIS_KEY }}
-          RAPIDAPI_TENNIS_HOST: ${{ secrets.RAPIDAPI_TENNIS_HOST }}

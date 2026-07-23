@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MatchstatRapidApiProvider } from "../src/data/providers/matchstat-rapidapi";
 import { computeUpcomingMatchPredictions } from "../src/prediction/upcoming-pipeline";
@@ -7,6 +7,16 @@ import { loadUpcomingMatchPredictionsToSupabase } from "../src/upcoming/load-upc
 import { ingestRecentMatchResults } from "../src/upcoming/results-ingester";
 
 const OUTPUT_DIR = path.join(process.cwd(), "work", "automation", "daily-refresh");
+const UPCOMING_DIR = path.join(process.cwd(), "work", "upcoming", "atp");
+
+type RateLimitedSyncSummary = {
+  provider: "matchstat-rapidapi";
+  dateFrom: string;
+  dateTo: string;
+  status: "rate_limited";
+  skippedPredictionRefresh: true;
+  message: string;
+};
 
 function addDays(baseDate: Date, days: number) {
   const next = new Date(baseDate);
@@ -20,6 +30,70 @@ function formatDate(date: Date) {
 
 function isRapidApiRateLimitError(error: unknown) {
   return error instanceof Error && error.message.includes("429");
+}
+
+function isRateLimitedSyncSummary(
+  summary: Awaited<ReturnType<typeof syncLiveUpcomingFeed>> | RateLimitedSyncSummary,
+): summary is RateLimitedSyncSummary {
+  return "status" in summary && summary.status === "rate_limited";
+}
+
+async function writeGitHubStepSummary(summary: {
+  referenceDate: string;
+  dateTo: string;
+  settlementSummary: unknown;
+  syncSummary:
+    | Awaited<ReturnType<typeof syncLiveUpcomingFeed>>
+    | RateLimitedSyncSummary;
+  predictionSummary:
+    | Awaited<ReturnType<typeof computeUpcomingMatchPredictions>>
+    | {
+        status: "skipped";
+        reason: "rapidapi_rate_limited";
+      };
+  loadSummary:
+    | Awaited<ReturnType<typeof loadUpcomingMatchPredictionsToSupabase>>
+    | {
+        status: "skipped";
+        reason: "rapidapi_rate_limited";
+      };
+}) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) {
+    return;
+  }
+
+  const syncOutcome = summary.syncSummary;
+  let liveSyncLine: string;
+  if (isRateLimitedSyncSummary(syncOutcome)) {
+    liveSyncLine = syncOutcome.message;
+  } else {
+    liveSyncLine = `${syncOutcome.resolvedMatches}/${syncOutcome.supportedMatches} supported matches resolved`;
+  }
+  const lines = [
+    "## ATP Daily Refresh",
+    "",
+    `- Health: ${isRateLimitedSyncSummary(syncOutcome) ? "Rate limited / stale data" : "Healthy"}`,
+    `- Window: ${summary.referenceDate} → ${summary.dateTo}`,
+    `- Live sync: ${liveSyncLine}`,
+    `- Predictions: ${
+      "status" in summary.predictionSummary
+        ? summary.predictionSummary.status === "skipped"
+          ? "Skipped because RapidAPI quota was exhausted"
+          : "Completed"
+        : "Completed"
+    }`,
+    `- Supabase load: ${
+      "status" in summary.loadSummary
+        ? summary.loadSummary.status === "skipped"
+          ? "Skipped because RapidAPI quota was exhausted"
+          : "Completed"
+        : "Completed"
+    }`,
+    "",
+  ];
+
+  await appendFile(summaryPath, `${lines.join("\n")}\n`, "utf8");
 }
 
 async function main() {
@@ -39,14 +113,7 @@ async function main() {
   });
   let syncSummary:
     | Awaited<ReturnType<typeof syncLiveUpcomingFeed>>
-    | {
-        provider: "matchstat-rapidapi";
-        dateFrom: string;
-        dateTo: string;
-        status: "rate_limited";
-        skippedPredictionRefresh: true;
-        message: string;
-      };
+    | RateLimitedSyncSummary;
   let predictionSummary:
     | Awaited<ReturnType<typeof computeUpcomingMatchPredictions>>
     | {
@@ -99,12 +166,41 @@ async function main() {
     loadSummary,
   };
 
+  const refreshHealth = {
+    generatedAt: new Date().toISOString(),
+    provider: "matchstat-rapidapi",
+    status:
+      isRateLimitedSyncSummary(syncSummary) ? "rate_limited" : "healthy",
+    message: isRateLimitedSyncSummary(syncSummary)
+      ? syncSummary.message
+      : "ATP live fixtures, predictions, and Supabase loads completed successfully.",
+    referenceDate,
+    dateTo,
+    syncStatus:
+      isRateLimitedSyncSummary(syncSummary) ? syncSummary.status : "success",
+    predictionStatus:
+      "status" in predictionSummary
+        ? predictionSummary.status
+        : "completed",
+    loadStatus:
+      "status" in loadSummary
+        ? loadSummary.status
+        : "completed",
+  } as const;
+
   await mkdir(OUTPUT_DIR, { recursive: true });
+  await mkdir(UPCOMING_DIR, { recursive: true });
   await writeFile(
     path.join(OUTPUT_DIR, "latest-daily-refresh-summary.json"),
     `${JSON.stringify(summary, null, 2)}\n`,
     "utf8",
   );
+  await writeFile(
+    path.join(UPCOMING_DIR, "refresh-health.json"),
+    `${JSON.stringify(refreshHealth, null, 2)}\n`,
+    "utf8",
+  );
+  await writeGitHubStepSummary(summary);
 
   console.log(JSON.stringify(summary, null, 2));
 }

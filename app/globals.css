@@ -1,35 +1,80 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 :root {
   color-scheme: dark;
-  --background: #080b10;
-  --surface-1: #0f131a;
-  --surface-2: #151a22;
-  --surface-3: #1b212c;
-  --surface-4: #232b37;
+  --font-sans:
+    "Inter",
+    "Inter",
+    "Segoe UI",
+    "Helvetica Neue",
+    "Arial Nova",
+    Arial,
+    sans-serif;
+  --background-main: #05102a;
+  --background-sidebar: #031426;
+  --background-topbar: #041126;
 
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --border-accent: rgba(122, 99, 241, 0.32);
+  --surface-card: #081c2a;
+  --surface-card-subtle: #071824;
+  --surface-inset: #07151f;
 
-  --text-primary: #f5f7fb;
-  --text-secondary: #a4acb9;
-  --text-muted: #6f7886;
+  --border-default: #14384f;
+  --border-subtle: #102b3d;
+  --border-accent: #0879a9;
 
-  --brand-primary: #7a63f1;
-  --brand-primary-soft: rgba(122, 99, 241, 0.18);
-  --brand-primary-strong: #927fff;
+  --text-primary: #f2f7ff;
+  --text-secondary: #8faac7;
+  --text-tertiary: #6f849c;
 
-  --positive: #93d06a;
-  --positive-soft: rgba(147, 208, 106, 0.16);
-  --warning: #e3b760;
+  --accent-blue: #147ae5;
+  --accent-cyan: #2ec2ff;
+  --accent-lime: #94ff2e;
+  --accent-yellow: #f0b54a;
+  --accent-green-dark: #0e3712;
+
+  --progress-track: #061521;
+  --chart-inactive: #0c2637;
+  --sidebar-active: #143155;
+  --sidebar-hover: rgba(255, 255, 255, 0.035);
+  --topbar-border: rgba(255, 255, 255, 0.05);
+  --featured-surface:
+    linear-gradient(120deg, #0d2232 0%, #091927 62%, #07142a 100%);
+  --surface-main:
+    radial-gradient(circle at top right, rgba(46, 194, 255, 0.12), transparent 24%),
+    linear-gradient(180deg, #071122 0%, #07101d 100%);
+  --progress-fill: linear-gradient(90deg, #0e6be0 0%, #2ec2ff 72%, #94ff2e 100%);
+  --featured-border-glow:
+    linear-gradient(
+      90deg,
+      rgba(46, 194, 255, 0) 0%,
+      rgba(46, 194, 255, 0.72) 50%,
+      rgba(148, 255, 46, 0) 100%
+    );
+  --status-surface: #0e3712;
+  --status-border: #94ff2e;
+
+  --background: var(--background-main);
+  --surface-1: color-mix(in srgb, var(--surface-card) 92%, white 8%);
+  --surface-2: var(--surface-card-subtle);
+  --surface-3: var(--surface-inset);
+  --surface-4: #102030;
+
+  --border-strong: color-mix(in srgb, var(--border-accent) 72%, white 28%);
+
+  --text-muted: var(--text-tertiary);
+
+  --brand-primary: var(--accent-cyan);
+  --brand-primary-soft: rgba(14, 107, 224, 0.18);
+  --brand-primary-strong: #5fd2ff;
+
+  --positive: var(--accent-lime);
+  --positive-soft: rgba(148, 255, 46, 0.14);
+  --warning: var(--accent-yellow);
   --danger: #ef6c73;
-  --neutral: #8b95a3;
+  --neutral: #8f97a8;
 
-  --shadow-card: 0 18px 50px rgba(0, 0, 0, 0.24);
-  --shadow-panel: 0 10px 28px rgba(0, 0, 0, 0.18);
+  --shadow-card: 0 14px 28px rgba(6, 30, 56, 0.18);
+  --shadow-panel: 0 10px 24px rgba(2, 13, 28, 0.2);
 }
 
 html {
@@ -41,11 +86,12 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top right, rgba(122, 99, 241, 0.12), transparent 22%),
-    radial-gradient(circle at top left, rgba(147, 208, 106, 0.08), transparent 26%),
-    linear-gradient(180deg, #080b10 0%, #0b0f14 100%);
+    radial-gradient(circle at top right, rgba(46, 194, 255, 0.12), transparent 22%),
+    radial-gradient(circle at top left, rgba(20, 122, 229, 0.08), transparent 26%),
+    linear-gradient(180deg, #05102a 0%, #061227 100%);
   color: var(--text-primary);
   font-family: var(--font-sans), sans-serif;
+  font-variant-numeric: tabular-nums;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
@@ -109,7 +155,8 @@ textarea:focus-visible {
 
 @layer components {
   .surface-panel {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0)),
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0)),
       var(--surface-1);
     border: 1px solid var(--border-subtle);
     box-shadow: var(--shadow-panel);
@@ -122,9 +169,32 @@ textarea:focus-visible {
 
   .app-grid {
     background-image:
-      linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-    background-size: 36px 36px;
+      linear-gradient(rgba(255, 255, 255, 0.014) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+    background-size: 96px 96px;
     background-position: center top;
+  }
+
+  .dashboard-card {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.012), rgba(255, 255, 255, 0)),
+      var(--surface-1);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-panel);
+  }
+
+  .dashboard-glow {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .dashboard-glow::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 82% 22%, rgba(46, 194, 255, 0.08), transparent 18%),
+      radial-gradient(circle at 24% 8%, rgba(20, 122, 229, 0.05), transparent 24%);
   }
 }

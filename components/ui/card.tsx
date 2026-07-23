@@ -9,7 +9,7 @@ export function Card({ className, elevated = false, ...props }: CardProps) {
   return (
     <div
       className={cn(
-        "rounded-panel border border-borderSubtle bg-surface1 text-ink shadow-panel",
+        "dashboard-card rounded-[24px] text-ink",
         elevated && "shadow-card",
         className,
       )}

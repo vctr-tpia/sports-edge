@@ -2,7 +2,7 @@ name: ATP Daily Refresh
 
 on:
   schedule:
-    - cron: "15 13 * * *"
+    - cron: "45 6 * * *"
   workflow_dispatch:
 
 concurrency:

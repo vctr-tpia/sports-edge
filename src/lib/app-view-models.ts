@@ -8,9 +8,14 @@ import {
   getLocalTournamentsById,
   getMatchDetailById,
   getUpcomingPredictionSnapshots,
+  getUpcomingRefreshHealth,
   getUpcomingPredictionSummary,
 } from "@/src/lib/local-data";
 import { getLatestModelHealthEvaluation } from "@/src/lib/model-health";
+import {
+  getArchivedPredictionMatchById,
+  getPredictionLedgerEntries,
+} from "@/src/lib/prediction-ledger";
 import type { MatchPrediction, PredictionFactor } from "@/src/domain/predictions/explanation";
 import type {
   HistoricalMatchFeatureSnapshot,
@@ -30,6 +35,7 @@ export type MatchStatus =
 
 export type ConfidenceLabel = "low" | "moderate" | "high" | "very_high";
 export type AdvantageStrength = "neutral" | "slight" | "moderate" | "strong";
+export type FreshnessTone = "healthy" | "warning" | "neutral";
 
 export interface PlayerSummary {
   id: string;
@@ -70,6 +76,7 @@ export interface MatchPredictionViewModel {
 export interface FactorInsightViewModel {
   key: string;
   label: string;
+  summary: string;
   favoredPlayerId: string | null;
   favoredPlayerName: string | null;
   strength: AdvantageStrength;
@@ -114,6 +121,7 @@ export interface SimilarContextViewModel {
 export interface MatchDetailViewModel {
   match: MatchPredictionViewModel;
   kind: "upcoming" | "historical";
+  actualWinnerName?: string | null;
   favoredPlayerName: string;
   underdogPlayerName: string;
   favoriteWinProbability: number;
@@ -137,7 +145,13 @@ export interface MatchDetailViewModel {
 
 export interface OverviewViewModel {
   freshnessLabel: string;
+  freshnessTone: FreshnessTone;
   generatedAt: string;
+  allUpcomingMatchCount: number;
+  averageConfidence: number;
+  slateTitle: string;
+  slateSubtitle: string;
+  slateMatches: MatchPredictionViewModel[];
   metricCards: Array<{ label: string; value: string; detail: string }>;
   featuredMatch: MatchPredictionViewModel | null;
   featuredPrediction: MatchPrediction | null;
@@ -145,6 +159,129 @@ export interface OverviewViewModel {
   upcomingMatches: MatchPredictionViewModel[];
   confidenceDistribution: Array<{ label: string; count: number }>;
   performanceHighlights: Array<{ label: string; value: string; detail: string }>;
+}
+
+export interface RankedPredictionViewModel {
+  match: MatchPredictionViewModel;
+  favoriteName: string;
+  favoriteProbability: number;
+  confidenceScore: number | null;
+  confidenceLabel: ConfidenceLabel | null;
+  factors: FactorInsightViewModel[];
+  supportingFactors: FactorInsightViewModel[];
+  counterFactors: FactorInsightViewModel[];
+  factorAgreement: {
+    favoredPlayerCount: number;
+    underdogCount: number;
+    neutralCount: number;
+  };
+  topFactor: FactorInsightViewModel | null;
+  topCounterFactor: FactorInsightViewModel | null;
+  recommendationScore: number;
+  stabilityScore: number;
+  dataCompleteness: number;
+}
+
+export interface TopSignalViewModel {
+  id: string;
+  matchId: string;
+  matchLabel: string;
+  tournamentName: string;
+  surface?: Surface | null;
+  favoriteName: string;
+  factor: FactorInsightViewModel;
+}
+
+export interface ModelEdgeViewModel {
+  id: string;
+  matchId: string;
+  matchLabel: string;
+  tournamentName: string;
+  surface?: Surface | null;
+  favoredPlayerName: string;
+  factorLabel: string;
+  strength: AdvantageStrength;
+  magnitudeLabel: string;
+  summary: string;
+  stabilityLabel: string;
+}
+
+export interface YesterdayPerformanceViewModel {
+  dateKey: string;
+  label: string;
+  predictionsMade: number;
+  settledCount: number;
+  unsettledCount: number;
+  correctCount: number;
+  accuracy: number;
+  averageFavoriteProbability: number;
+  averageConfidenceScore: number;
+  brierScore: number;
+  highConfidenceAccuracy: number | null;
+  highConfidenceSample: number;
+  mostConfidentCorrect:
+    | { matchId: string; label: string; probability: number }
+    | null;
+  mostConfidentMiss:
+    | { matchId: string; label: string; probability: number }
+    | null;
+}
+
+export interface PredictionLedgerEntryViewModel {
+  matchId: string;
+  detailHref: string | null;
+  matchLabel: string;
+  tournamentLabel: string;
+  favoriteName: string;
+  favoriteProbability: number;
+  confidenceScore: number | null;
+  confidenceLabel: ConfidenceLabel | null;
+  status: "upcoming" | "correct" | "incorrect" | "void";
+  statusLabel: string;
+  settledScore?: string | null;
+  settledWinnerName?: string | null;
+  generatedAt: string;
+  modelVersion: string;
+  topFactorLabel?: string | null;
+  matchDate: string;
+  scheduledAt?: string | null;
+}
+
+export interface PredictionsPageViewModel {
+  freshnessLabel: string;
+  freshnessTone: FreshnessTone;
+  hero: {
+    dateLabel: string;
+    matchesAnalyzed: number;
+    publishedPicks: number;
+    totalPredictions: number;
+    averageFavoriteProbability: number;
+    averageConfidenceScore: number;
+    highestConfidencePrediction: RankedPredictionViewModel | null;
+    strongestSignal: TopSignalViewModel | null;
+    topConfidence: number;
+    bestAgreementLabel: string;
+    primaryModelVersion: string;
+    generatedAt: string;
+    healthMessage: string | null;
+  };
+  commentary: {
+    summary: string;
+    stableNote: string;
+    cautionNote: string;
+    dataNote: string;
+  };
+  confidenceDistribution: {
+    totalCount: number;
+    averageConfidenceScore: number;
+    highlightedBucket: ConfidenceLabel | null;
+    buckets: Array<{ key: ConfidenceLabel; label: string; count: number }>;
+  };
+  topSignals: TopSignalViewModel[];
+  rankedRecommendations: RankedPredictionViewModel[];
+  biggestEdges: ModelEdgeViewModel[];
+  yesterdayPerformance: YesterdayPerformanceViewModel | null;
+  predictionLedger: PredictionLedgerEntryViewModel[];
 }
 
 function buildConfidenceLabel(value: number | null | undefined): ConfidenceLabel | null {
@@ -209,6 +346,131 @@ function formatRelativeMinutes(fromIso: string) {
   return `ATP data updated ${diffMinutes} min ago`;
 }
 
+function formatStaleMinutes(fromIso: string) {
+  const diffMs = Date.now() - new Date(fromIso).getTime();
+  const diffMinutes = Math.max(0, Math.round(diffMs / 60000));
+
+  if (diffMinutes >= 60) {
+    const diffHours = Math.round(diffMinutes / 60);
+    return `ATP data stale · updated ${diffHours} hr${diffHours === 1 ? "" : "s"} ago`;
+  }
+
+  return `ATP data stale · updated ${diffMinutes} min ago`;
+}
+
+function favoriteProbabilityFromMatch(match: MatchPredictionViewModel) {
+  return match.favoredPlayerId === match.playerA.id
+    ? match.playerAProbability ?? 0.5
+    : match.playerBProbability ?? 0.5;
+}
+
+const OVERVIEW_TIME_ZONE = "America/Los_Angeles";
+
+function zonedDateKey(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: OVERVIEW_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function matchOverviewDateKey(match: MatchPredictionViewModel) {
+  if (match.scheduledAt) {
+    const parsed = new Date(match.scheduledAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      return zonedDateKey(parsed);
+    }
+  }
+
+  return match.matchDate;
+}
+
+function compareUpcomingMatchTime(left: MatchPredictionViewModel, right: MatchPredictionViewModel) {
+  const leftStamp = left.scheduledAt ?? `${left.matchDate}T00:00:00Z`;
+  const rightStamp = right.scheduledAt ?? `${right.matchDate}T00:00:00Z`;
+  return leftStamp.localeCompare(rightStamp);
+}
+
+function buildUpcomingFreshnessStatus({
+  generatedAt,
+  futureMatchCount,
+  healthStatus,
+}: {
+  generatedAt: string;
+  futureMatchCount: number;
+  healthStatus?: "healthy" | "warning" | "rate_limited" | null;
+}): { label: string; tone: FreshnessTone } {
+  const ageMinutes = Math.max(0, Math.round((Date.now() - new Date(generatedAt).getTime()) / 60000));
+
+  if (healthStatus === "rate_limited") {
+    return {
+      label: "ATP data stale · RapidAPI quota reached",
+      tone: "warning",
+    };
+  }
+
+  if (futureMatchCount === 0) {
+    return {
+      label: "ATP data stale · no future slate loaded",
+      tone: "warning",
+    };
+  }
+
+  if (healthStatus === "warning" || ageMinutes >= 12 * 60) {
+    return {
+      label: formatStaleMinutes(generatedAt),
+      tone: "warning",
+    };
+  }
+
+  return {
+    label: formatRelativeMinutes(generatedAt),
+    tone: "healthy",
+  };
+}
+
+function formatDateKeyLabel(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, (month ?? 1) - 1, day ?? 1, 12)));
+}
+
+function formatCompactDateLabel(value: Date) {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: OVERVIEW_TIME_ZONE,
+    weekday: "short",
+  })
+    .format(value)
+    .toUpperCase();
+  const month = new Intl.DateTimeFormat("en-US", {
+    timeZone: OVERVIEW_TIME_ZONE,
+    month: "short",
+  })
+    .format(value)
+    .toUpperCase();
+  const day = new Intl.DateTimeFormat("en-US", {
+    timeZone: OVERVIEW_TIME_ZONE,
+    day: "numeric",
+  }).format(value);
+
+  return `${weekday} · ${month} ${day}`;
+}
+
 function probabilityBucket(probability: number) {
   const bucketStart = Math.floor((probability - 0.5) / 0.05) * 5 + 50;
   const start = Math.max(50, Math.min(95, bucketStart));
@@ -266,6 +528,7 @@ function buildFactorInsights(
       return {
         key: factor.key,
         label: factor.label,
+        summary: factor.summary,
         favoredPlayerId,
         favoredPlayerName,
         strength: factorStrength(edgeMagnitude),
@@ -363,11 +626,12 @@ function mapHistoricalMatchViewModel(
 }
 
 export async function getOverviewViewModel(): Promise<OverviewViewModel> {
-  const [playersById, upcomingRows, upcomingSummary, modelHealth] =
+  const [playersById, upcomingRows, upcomingSummary, upcomingHealth, modelHealth] =
     await Promise.all([
       getLocalPlayersById(),
       getUpcomingPredictionSnapshots(),
       getUpcomingPredictionSummary(),
+      getUpcomingRefreshHealth(),
       getLatestModelHealthEvaluation(),
     ]);
 
@@ -390,7 +654,27 @@ export async function getOverviewViewModel(): Promise<OverviewViewModel> {
     ),
   );
 
-  const featuredMatch = [...upcomingMatches].sort(
+  const tomorrowKey = zonedDateKey(addDays(new Date(), 1));
+  const todayKey = zonedDateKey(new Date());
+  const futureDateKeys = [...new Set(upcomingMatches.map(matchOverviewDateKey))]
+    .filter((dateKey) => dateKey > todayKey)
+    .sort((left, right) => left.localeCompare(right));
+  const preferredSlateDateKey =
+    futureDateKeys.find((dateKey) => dateKey === tomorrowKey) ?? futureDateKeys[0] ?? null;
+  const tomorrowFirstSlateMatches = preferredSlateDateKey
+    ? upcomingMatches
+        .filter((match) => matchOverviewDateKey(match) === preferredSlateDateKey)
+        .sort(compareUpcomingMatchTime)
+    : [];
+  const usingTomorrowSlate = preferredSlateDateKey === tomorrowKey;
+  const futureMatchCount = upcomingMatches.filter((match) => matchOverviewDateKey(match) > todayKey).length;
+  const freshnessStatus = buildUpcomingFreshnessStatus({
+    generatedAt: upcomingSummary.generatedAt,
+    futureMatchCount,
+    healthStatus: upcomingHealth?.status ?? null,
+  });
+
+  const featuredMatch = [...(tomorrowFirstSlateMatches.length > 0 ? tomorrowFirstSlateMatches : upcomingMatches)].sort(
     (left, right) => (right.confidenceScore ?? 0) - (left.confidenceScore ?? 0),
   )[0] ?? null;
   const featuredPrediction =
@@ -403,42 +687,56 @@ export async function getOverviewViewModel(): Promise<OverviewViewModel> {
       : [];
 
   const averageConfidence =
-    upcomingMatches.reduce((sum, row) => sum + (row.confidenceScore ?? 0), 0) /
+    upcomingMatches.reduce((sum, row) => sum + favoriteProbabilityFromMatch(row), 0) /
     Math.max(1, upcomingMatches.length);
   const confidenceCounts = ["low", "moderate", "high", "very_high"].map((label) => ({
     label,
     count: upcomingMatches.filter((match) => match.confidenceLabel === label).length,
   }));
+  const publishedUpcomingMatches = upcomingMatches.slice(0, 12);
+  const slateMatches = [...tomorrowFirstSlateMatches]
+    .sort((left, right) => (right.confidenceScore ?? 0) - (left.confidenceScore ?? 0))
+    .slice(0, 4);
 
   return {
-    freshnessLabel: formatRelativeMinutes(upcomingSummary.generatedAt),
+    freshnessLabel: freshnessStatus.label,
+    freshnessTone: freshnessStatus.tone,
     generatedAt: upcomingSummary.generatedAt,
+    allUpcomingMatchCount: upcomingMatches.length,
+    averageConfidence,
+    slateTitle: usingTomorrowSlate ? "Tomorrow's slate" : "Next slate",
+    slateSubtitle: usingTomorrowSlate
+      ? "Highest-confidence matches scheduled for tomorrow"
+      : preferredSlateDateKey
+        ? `Highest-confidence matches scheduled for ${formatDateKeyLabel(preferredSlateDateKey)}`
+        : "No upcoming slate is scheduled yet",
+    slateMatches,
     metricCards: [
       {
         label: "Upcoming matches",
         value: `${upcomingSummary.upcomingMatchCount}`,
-        detail: "Matches currently mapped into the ATP prediction pipeline",
+        detail: "Mapped into today's slate",
       },
       {
         label: "Predictions ready",
         value: `${upcomingMatches.length}`,
-        detail: "Upcoming ATP matches with a generated pre-match probability",
+        detail: "Pre-match probabilities",
       },
       {
         label: "Avg confidence",
         value: `${Math.round(averageConfidence * 100)}%`,
-        detail: "Average confidence across the current upcoming ATP slate",
+        detail: "Across loaded upcoming picks",
       },
       {
         label: "Primary model",
         value: modelHealth?.evaluation.primary_model_version ?? "baseline-v5",
-        detail: "Current flagship explainable baseline shown across the MVP",
+        detail: "Current explainable model",
       },
     ],
     featuredMatch,
     featuredPrediction,
     featuredFactors,
-    upcomingMatches: upcomingMatches.slice(0, 12),
+    upcomingMatches: publishedUpcomingMatches,
     confidenceDistribution: confidenceCounts,
     performanceHighlights: modelHealth
       ? [
@@ -475,14 +773,15 @@ type DirectoryFilters = {
 };
 
 export async function getUpcomingDirectoryViewModel(filters: DirectoryFilters = {}) {
-  const [playersById, upcomingRows, upcomingSummary] = await Promise.all([
+  const [playersById, upcomingRows, upcomingSummary, upcomingHealth] = await Promise.all([
     getLocalPlayersById(),
     getUpcomingPredictionSnapshots(),
     getUpcomingPredictionSummary(),
+    getUpcomingRefreshHealth(),
   ]);
   const rankingByPlayerId = await loadRankingByPlayerId();
 
-  let rows = upcomingRows.map((entry) =>
+  const allUpcomingMatches = upcomingRows.map((entry) =>
     mapUpcomingMatchViewModel(
       entry,
       {
@@ -499,6 +798,7 @@ export async function getUpcomingDirectoryViewModel(filters: DirectoryFilters = 
       },
     ),
   );
+  let rows = [...allUpcomingMatches];
 
   const query = filters.query?.trim().toLowerCase();
   if (query) {
@@ -552,21 +852,31 @@ export async function getUpcomingDirectoryViewModel(filters: DirectoryFilters = 
       });
   }
 
+  const todayKey = zonedDateKey(new Date());
+  const futureMatchCount = allUpcomingMatches.filter((match) => matchOverviewDateKey(match) > todayKey).length;
+  const freshnessStatus = buildUpcomingFreshnessStatus({
+    generatedAt: upcomingSummary.generatedAt,
+    futureMatchCount,
+    healthStatus: upcomingHealth?.status ?? null,
+  });
+
   return {
-    freshnessLabel: formatRelativeMinutes(upcomingSummary.generatedAt),
+    freshnessLabel: freshnessStatus.label,
+    freshnessTone: freshnessStatus.tone,
     tournaments: [...new Set(upcomingRows.map((entry) => entry.match.tournament_name))].sort(),
     matches: rows,
   };
 }
 
 export async function getPredictionsDirectoryViewModel(filters: DirectoryFilters = {}) {
-  const [playersById, tournamentsById, upcomingRows, historicalSnapshots, upcomingSummary] =
+  const [playersById, tournamentsById, upcomingRows, historicalSnapshots, upcomingSummary, upcomingHealth] =
     await Promise.all([
       getLocalPlayersById(),
       getLocalTournamentsById(),
       getUpcomingPredictionSnapshots(),
       getHistoricalFeatureSnapshots(40),
       getUpcomingPredictionSummary(),
+      getUpcomingRefreshHealth(),
     ]);
   const rankingByPlayerId = await loadRankingByPlayerId();
 
@@ -628,9 +938,544 @@ export async function getPredictionsDirectoryViewModel(filters: DirectoryFilters
     return rightStamp.localeCompare(leftStamp);
   });
 
+  const todayKey = zonedDateKey(new Date());
+  const futureMatchCount = upcomingMatches.filter((match) => matchOverviewDateKey(match) > todayKey).length;
+  const freshnessStatus = buildUpcomingFreshnessStatus({
+    generatedAt: upcomingSummary.generatedAt,
+    futureMatchCount,
+    healthStatus: upcomingHealth?.status ?? null,
+  });
+
   return {
-    freshnessLabel: formatRelativeMinutes(upcomingSummary.generatedAt),
+    freshnessLabel: freshnessStatus.label,
+    freshnessTone: freshnessStatus.tone,
     predictions: rows,
+  };
+}
+
+function playerSummaryForId(
+  playerId: string,
+  playersById: Map<string, ActivePlayer>,
+  rankingByPlayerId: Map<string, number | null>,
+): PlayerSummary {
+  return {
+    id: playerId,
+    name: playersById.get(playerId)?.full_name ?? playerId,
+    countryCode: playersById.get(playerId)?.country_code,
+    ranking: rankingByPlayerId.get(playerId) ?? null,
+  };
+}
+
+function sentenceCase(value?: string | null) {
+  if (!value) {
+    return "Unavailable";
+  }
+
+  return value
+    .split("_")
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function matchLabel(match: MatchPredictionViewModel) {
+  return `${match.playerA.name} vs ${match.playerB.name}`;
+}
+
+function factorAgreementSummary(
+  factors: FactorInsightViewModel[],
+  favoredPlayerId: string | null | undefined,
+) {
+  return factors.reduce(
+    (summary, factor) => {
+      if (!factor.favoredPlayerId || factor.strength === "neutral") {
+        summary.neutralCount += 1;
+      } else if (factor.favoredPlayerId === favoredPlayerId) {
+        summary.favoredPlayerCount += 1;
+      } else {
+        summary.underdogCount += 1;
+      }
+
+      return summary;
+    },
+    {
+      favoredPlayerCount: 0,
+      underdogCount: 0,
+      neutralCount: 0,
+    },
+  );
+}
+
+function favoriteNameFromMatch(match: MatchPredictionViewModel) {
+  if (match.favoredPlayerId === match.playerA.id) {
+    return match.playerA.name;
+  }
+
+  return match.playerB.name;
+}
+
+function topFactorForPrediction(
+  factors: FactorInsightViewModel[],
+  favoredPlayerId: string | null | undefined,
+) {
+  return (
+    factors.find((factor) => factor.favoredPlayerId === favoredPlayerId) ??
+    factors.find((factor) => factor.favoredPlayerId !== null) ??
+    null
+  );
+}
+
+function topCounterFactorForPrediction(
+  factors: FactorInsightViewModel[],
+  favoredPlayerId: string | null | undefined,
+) {
+  return (
+    factors.find((factor) => factor.favoredPlayerId && factor.favoredPlayerId !== favoredPlayerId) ?? null
+  );
+}
+
+function completenessScore(match: MatchPredictionViewModel, factors: FactorInsightViewModel[]) {
+  let score = 0;
+
+  if (match.playerA.ranking) score += 1;
+  if (match.playerB.ranking) score += 1;
+  if (match.scheduledAt) score += 1;
+  if (match.confidenceScore !== null && match.confidenceScore !== undefined) score += 1;
+  if (factors.length >= 4) score += 1;
+
+  return score;
+}
+
+function recommendationScore(
+  match: MatchPredictionViewModel,
+  factors: FactorInsightViewModel[],
+  agreement: { favoredPlayerCount: number; underdogCount: number; neutralCount: number },
+) {
+  const favoriteProbability = favoriteProbabilityFromMatch(match);
+  const confidenceScore = match.confidenceScore ?? 0;
+  const topFactor = topFactorForPrediction(factors, match.favoredPlayerId);
+  const stability =
+    agreement.favoredPlayerCount -
+    agreement.underdogCount +
+    Math.min(1, agreement.neutralCount * 0.15);
+
+  return (
+    confidenceScore * 1000 +
+    favoriteProbability * 100 +
+    stability * 12 +
+    (topFactor?.edgeMagnitude ?? 0) * 80
+  );
+}
+
+function makeRankedPredictionViewModel(
+  match: MatchPredictionViewModel,
+  prediction: MatchPrediction,
+): RankedPredictionViewModel {
+  const factors = buildFactorInsights(prediction, match.playerA, match.playerB);
+  const supportingFactors = factors.filter((factor) => factor.favoredPlayerId === match.favoredPlayerId);
+  const counterFactors = factors.filter(
+    (factor) => factor.favoredPlayerId && factor.favoredPlayerId !== match.favoredPlayerId,
+  );
+  const factorAgreement = factorAgreementSummary(factors, match.favoredPlayerId);
+  const favoriteProbability = favoriteProbabilityFromMatch(match);
+  const dataCompleteness = completenessScore(match, factors);
+
+  return {
+    match,
+    favoriteName: favoriteNameFromMatch(match),
+    favoriteProbability,
+    confidenceScore: match.confidenceScore ?? null,
+    confidenceLabel: match.confidenceLabel ?? null,
+    factors,
+    supportingFactors,
+    counterFactors,
+    factorAgreement,
+    topFactor: topFactorForPrediction(factors, match.favoredPlayerId),
+    topCounterFactor: topCounterFactorForPrediction(factors, match.favoredPlayerId),
+    recommendationScore: recommendationScore(match, factors, factorAgreement),
+    stabilityScore: factorAgreement.favoredPlayerCount - factorAgreement.underdogCount,
+    dataCompleteness,
+  };
+}
+
+function factorMagnitudeLabel(factor: FactorInsightViewModel) {
+  if (factor.label.toLowerCase().includes("elo")) {
+    return `${factor.playerAValue > factor.playerBValue ? "+" : "+"}${Math.round(Math.abs(factor.playerAValue - factor.playerBValue))}`;
+  }
+
+  if (
+    factor.label.toLowerCase().includes("rate") ||
+    factor.label.toLowerCase().includes("form") ||
+    factor.label.toLowerCase().includes("quality")
+  ) {
+    return `+${Math.round(Math.abs(factor.playerAValue - factor.playerBValue) * 10) / 10}`;
+  }
+
+  return `+${Math.round(factor.edgeMagnitude * 100)}%`;
+}
+
+function buildCommentary(
+  rankedRecommendations: RankedPredictionViewModel[],
+  topSignals: TopSignalViewModel[],
+  healthMessage: string | null,
+) {
+  const strongest = rankedRecommendations[0] ?? null;
+  const stablePick = rankedRecommendations.find((entry) => entry.stabilityScore >= 3) ?? strongest;
+  const cautionPick = rankedRecommendations.find((entry) => entry.counterFactors.length > 0) ?? null;
+  const strongestSignal = topSignals[0] ?? null;
+
+  return {
+    summary: strongest
+      ? `${strongest.favoriteName} leads the current slate at ${Math.round(
+          strongest.favoriteProbability * 100,
+        )}% with ${strongest.factorAgreement.favoredPlayerCount} supporting factors.`
+      : "No published ATP predictions are currently available.",
+    stableNote: stablePick?.topFactor
+      ? `${stablePick.match.playerA.name} vs ${stablePick.match.playerB.name} is the cleanest read because ${stablePick.topFactor.summary.toLowerCase()}.`
+      : "Signal agreement is unavailable until the next prediction refresh.",
+    cautionNote: cautionPick?.topCounterFactor
+      ? `${cautionPick.match.playerA.name} vs ${cautionPick.match.playerB.name} still carries a counter-signal through ${cautionPick.topCounterFactor.label.toLowerCase()}.`
+      : strongestSignal
+        ? `${strongestSignal.factor.label} is driving the headline edge, but supporting signals remain more important than any single factor.`
+        : "No meaningful counter-signals were available in the current slate snapshot.",
+    dataNote:
+      healthMessage ??
+      "Predictions are generated from the latest stored ATP slate and remain explainable through the factor breakdown shown below.",
+  };
+}
+
+function buildConfidenceDistribution(rankedRecommendations: RankedPredictionViewModel[]) {
+  const buckets: Array<{ key: ConfidenceLabel; label: string; count: number }> = [
+    { key: "low", label: "Low", count: 0 },
+    { key: "moderate", label: "Moderate", count: 0 },
+    { key: "high", label: "High", count: 0 },
+    { key: "very_high", label: "Very High", count: 0 },
+  ];
+
+  for (const recommendation of rankedRecommendations) {
+    const key = recommendation.confidenceLabel;
+    const bucket = buckets.find((entry) => entry.key === key);
+    if (bucket) {
+      bucket.count += 1;
+    }
+  }
+
+  const averageConfidenceScore =
+    rankedRecommendations.reduce((sum, entry) => sum + (entry.confidenceScore ?? 0), 0) /
+    Math.max(1, rankedRecommendations.length);
+
+  return {
+    totalCount: rankedRecommendations.length,
+    averageConfidenceScore,
+    highlightedBucket: buildConfidenceLabel(averageConfidenceScore),
+    buckets,
+  };
+}
+
+function buildPredictionLedgerStatus(
+  result: "won" | "lost" | "void",
+): Pick<PredictionLedgerEntryViewModel, "status" | "statusLabel"> {
+  switch (result) {
+    case "won":
+      return {
+        status: "correct",
+        statusLabel: "Correct",
+      };
+    case "lost":
+      return {
+        status: "incorrect",
+        statusLabel: "Incorrect",
+      };
+    default:
+      return {
+        status: "void",
+        statusLabel: "Void",
+      };
+  }
+}
+
+function livePredictionLedgerEntry(
+  entry: RankedPredictionViewModel,
+): PredictionLedgerEntryViewModel {
+  return {
+    matchId: entry.match.matchId,
+    detailHref: `/match/${entry.match.matchId}`,
+    matchLabel: matchLabel(entry.match),
+    tournamentLabel: `${entry.match.tournamentName} · ${entry.match.round ?? "Round unavailable"} · ${entry.match.surface ?? "Surface unavailable"}`,
+    favoriteName: entry.favoriteName,
+    favoriteProbability: entry.favoriteProbability,
+    confidenceScore: entry.confidenceScore,
+    confidenceLabel: entry.confidenceLabel,
+    status: "upcoming",
+    statusLabel: "Upcoming",
+    settledScore: null,
+    settledWinnerName: null,
+    generatedAt: entry.match.generatedAt ?? entry.match.matchDate,
+    modelVersion: entry.match.modelVersion ?? "baseline-v5",
+    topFactorLabel: entry.topFactor?.label ?? null,
+    matchDate: entry.match.matchDate,
+    scheduledAt: entry.match.scheduledAt ?? null,
+  };
+}
+
+function archivedPredictionLedgerEntry(
+  entry: Awaited<ReturnType<typeof getPredictionLedgerEntries>>[number],
+): PredictionLedgerEntryViewModel {
+  const favoriteProbability =
+    entry.favoritePlayerId === entry.playerAId
+      ? entry.playerAWinProbability
+      : entry.playerBWinProbability;
+  const status = buildPredictionLedgerStatus(entry.predictionResult);
+
+  return {
+    matchId: entry.matchId,
+    detailHref:
+      entry.matchStatus === "completed" && entry.settledWinnerId ? `/match/${entry.matchId}` : null,
+    matchLabel: `${entry.playerAName} vs ${entry.playerBName}`,
+    tournamentLabel: `${entry.tournamentName} · ${entry.round} · ${entry.surface}`,
+    favoriteName: entry.favoritePlayerName,
+    favoriteProbability,
+    confidenceScore: entry.confidence,
+    confidenceLabel: buildConfidenceLabel(entry.confidence),
+    status: status.status,
+    statusLabel: status.statusLabel,
+    settledScore: entry.settledScore,
+    settledWinnerName: entry.settledWinnerName,
+    generatedAt: entry.generatedAt,
+    modelVersion: entry.modelVersion,
+    topFactorLabel: null,
+    matchDate: entry.matchDate,
+    scheduledAt: entry.scheduledAt,
+  };
+}
+
+function buildYesterdayPerformance(
+  historicalSnapshots: HistoricalMatchFeatureSnapshot[],
+  playersById: Map<string, ActivePlayer>,
+  rankingByPlayerId: Map<string, number | null>,
+  tournamentsById: Map<string, { name: string }>,
+): YesterdayPerformanceViewModel | null {
+  const yesterdayKey = zonedDateKey(addDays(new Date(), -1));
+  const relevantSnapshots = historicalSnapshots.filter((snapshot) => snapshot.matchDate === yesterdayKey);
+
+  if (relevantSnapshots.length === 0) {
+    return null;
+  }
+
+  const ranked = relevantSnapshots.map((snapshot) => {
+    const prediction = generatePredictionFromFeatureSnapshot(snapshot);
+    const match = mapHistoricalMatchViewModel(
+      snapshot,
+      prediction,
+      tournamentsById.get(snapshot.tournamentId)?.name ?? snapshot.tournamentId,
+      playerSummaryForId(snapshot.playerAId, playersById, rankingByPlayerId),
+      playerSummaryForId(snapshot.playerBId, playersById, rankingByPlayerId),
+    );
+
+    return {
+      match,
+      prediction,
+      favoriteProbability: favoriteProbabilityFromMatch(match),
+      predictionCorrect: prediction.favoritePlayerId === snapshot.actualWinnerId,
+    };
+  });
+
+  const correct = ranked.filter((entry) => entry.predictionCorrect);
+  const highConfidence = ranked.filter((entry) => entry.match.confidenceLabel === "high" || entry.match.confidenceLabel === "very_high");
+  const brierScore =
+    ranked.reduce((sum, entry) => {
+      const actual = entry.predictionCorrect ? 1 : 0;
+      return sum + (entry.favoriteProbability - actual) ** 2;
+    }, 0) / Math.max(1, ranked.length);
+  const mostConfidentCorrect = [...correct].sort((left, right) => right.favoriteProbability - left.favoriteProbability)[0];
+  const misses = ranked.filter((entry) => !entry.predictionCorrect);
+  const mostConfidentMiss = [...misses].sort((left, right) => right.favoriteProbability - left.favoriteProbability)[0];
+
+  return {
+    dateKey: yesterdayKey,
+    label: `Yesterday · ${formatDateKeyLabel(yesterdayKey)}`,
+    predictionsMade: ranked.length,
+    settledCount: ranked.length,
+    unsettledCount: 0,
+    correctCount: correct.length,
+    accuracy: correct.length / Math.max(1, ranked.length),
+    averageFavoriteProbability:
+      ranked.reduce((sum, entry) => sum + entry.favoriteProbability, 0) / Math.max(1, ranked.length),
+    averageConfidenceScore:
+      ranked.reduce((sum, entry) => sum + (entry.match.confidenceScore ?? 0), 0) / Math.max(1, ranked.length),
+    brierScore,
+    highConfidenceAccuracy:
+      highConfidence.length > 0
+        ? highConfidence.filter((entry) => entry.predictionCorrect).length / highConfidence.length
+        : null,
+    highConfidenceSample: highConfidence.length,
+    mostConfidentCorrect: mostConfidentCorrect
+      ? {
+          matchId: mostConfidentCorrect.match.matchId,
+          label: matchLabel(mostConfidentCorrect.match),
+          probability: mostConfidentCorrect.favoriteProbability,
+        }
+      : null,
+    mostConfidentMiss: mostConfidentMiss
+      ? {
+          matchId: mostConfidentMiss.match.matchId,
+          label: matchLabel(mostConfidentMiss.match),
+          probability: mostConfidentMiss.favoriteProbability,
+        }
+      : null,
+  };
+}
+
+export async function getPredictionsPageViewModel(): Promise<PredictionsPageViewModel> {
+  const [
+    playersById,
+    tournamentsById,
+    upcomingRows,
+    historicalSnapshots,
+    upcomingSummary,
+    upcomingHealth,
+    modelHealth,
+    archivedLedgerRows,
+  ] = await Promise.all([
+    getLocalPlayersById(),
+    getLocalTournamentsById(),
+    getUpcomingPredictionSnapshots(),
+    getHistoricalFeatureSnapshots(),
+    getUpcomingPredictionSummary(),
+    getUpcomingRefreshHealth(),
+    getLatestModelHealthEvaluation(),
+    getPredictionLedgerEntries(),
+  ]);
+
+  const rankingByPlayerId = await loadRankingByPlayerId();
+
+  const rankedRecommendations = upcomingRows
+    .map((entry) => {
+      const match = mapUpcomingMatchViewModel(
+        entry,
+        playerSummaryForId(entry.snapshot.playerAId, playersById, rankingByPlayerId),
+        playerSummaryForId(entry.snapshot.playerBId, playersById, rankingByPlayerId),
+      );
+
+      return makeRankedPredictionViewModel(match, entry.prediction);
+    })
+    .sort((left, right) => {
+      if (right.recommendationScore !== left.recommendationScore) {
+        return right.recommendationScore - left.recommendationScore;
+      }
+
+      if ((right.confidenceScore ?? 0) !== (left.confidenceScore ?? 0)) {
+        return (right.confidenceScore ?? 0) - (left.confidenceScore ?? 0);
+      }
+
+      return right.favoriteProbability - left.favoriteProbability;
+    });
+
+  const topSignals = rankedRecommendations
+    .flatMap((entry) =>
+      entry.supportingFactors.map((factor) => ({
+        id: `${entry.match.matchId}-${factor.key}`,
+        matchId: entry.match.matchId,
+        matchLabel: matchLabel(entry.match),
+        tournamentName: entry.match.tournamentName,
+        surface: entry.match.surface,
+        favoriteName: entry.favoriteName,
+        factor,
+      })),
+    )
+    .sort((left, right) => right.factor.edgeMagnitude - left.factor.edgeMagnitude)
+    .slice(0, 6);
+
+  const biggestEdges = rankedRecommendations
+    .flatMap((entry) => {
+      const strongest = entry.topFactor;
+      if (!strongest) {
+        return [];
+      }
+
+      return [
+        {
+          id: `edge-${entry.match.matchId}`,
+          matchId: entry.match.matchId,
+          matchLabel: matchLabel(entry.match),
+          tournamentName: entry.match.tournamentName,
+          surface: entry.match.surface,
+          favoredPlayerName: entry.favoriteName,
+          factorLabel: strongest.label,
+          strength: strongest.strength,
+          magnitudeLabel: factorMagnitudeLabel(strongest),
+          summary: strongest.summary,
+          stabilityLabel: `${entry.factorAgreement.favoredPlayerCount} of ${entry.factors.length} factors align`,
+        } satisfies ModelEdgeViewModel,
+      ];
+    })
+    .sort((left, right) => {
+      const leftMagnitude = Number(left.magnitudeLabel.replace(/[^0-9.]/g, "")) || 0;
+      const rightMagnitude = Number(right.magnitudeLabel.replace(/[^0-9.]/g, "")) || 0;
+      return rightMagnitude - leftMagnitude;
+    })
+    .slice(0, 4);
+
+  const confidenceDistribution = buildConfidenceDistribution(rankedRecommendations);
+  const averageFavoriteProbability =
+    rankedRecommendations.reduce((sum, entry) => sum + entry.favoriteProbability, 0) /
+    Math.max(1, rankedRecommendations.length);
+
+  const futureMatchCount = rankedRecommendations.filter((entry) => matchOverviewDateKey(entry.match) > zonedDateKey(new Date())).length;
+  const freshnessStatus = buildUpcomingFreshnessStatus({
+    generatedAt: upcomingSummary.generatedAt,
+    futureMatchCount,
+    healthStatus: upcomingHealth?.status ?? null,
+  });
+  const healthMessage =
+    upcomingHealth?.status === "rate_limited"
+      ? "RapidAPI quota is currently exhausted, so the page is showing the most recently stored ATP prediction slate."
+      : upcomingHealth?.message ?? null;
+  const archivedLedgerKeys = new Set(
+    archivedLedgerRows.map((entry) => `${entry.matchId}::${entry.modelVersion}`),
+  );
+  const liveLedger = rankedRecommendations
+    .filter(
+      (entry) =>
+        !archivedLedgerKeys.has(
+          `${entry.match.matchId}::${entry.match.modelVersion ?? "baseline-v5"}`,
+        ),
+    )
+    .sort((left, right) => compareUpcomingMatchTime(left.match, right.match))
+    .map(livePredictionLedgerEntry);
+  const archivedLedger = archivedLedgerRows.map(archivedPredictionLedgerEntry);
+
+  return {
+    freshnessLabel: freshnessStatus.label,
+    freshnessTone: freshnessStatus.tone,
+    hero: {
+      dateLabel: formatCompactDateLabel(new Date()),
+      matchesAnalyzed: upcomingRows.length,
+      publishedPicks: rankedRecommendations.length,
+      totalPredictions: rankedRecommendations.length,
+      averageFavoriteProbability,
+      averageConfidenceScore: confidenceDistribution.averageConfidenceScore,
+      highestConfidencePrediction: rankedRecommendations[0] ?? null,
+      strongestSignal: topSignals[0] ?? null,
+      topConfidence: rankedRecommendations[0]?.favoriteProbability ?? 0,
+      bestAgreementLabel: rankedRecommendations[0]
+        ? `${rankedRecommendations[0].factorAgreement.favoredPlayerCount}/${rankedRecommendations[0].factors.length}`
+        : "Unavailable",
+      primaryModelVersion: modelHealth?.evaluation.primary_model_version ?? "baseline-v5",
+      generatedAt: upcomingSummary.generatedAt,
+      healthMessage,
+    },
+    commentary: buildCommentary(rankedRecommendations, topSignals, healthMessage),
+    confidenceDistribution,
+    topSignals,
+    rankedRecommendations: rankedRecommendations.slice(0, 8),
+    biggestEdges,
+    yesterdayPerformance: buildYesterdayPerformance(
+      historicalSnapshots,
+      playersById,
+      rankingByPlayerId,
+      tournamentsById,
+    ),
+    predictionLedger: [...liveLedger, ...archivedLedger],
   };
 }
 
@@ -669,12 +1514,14 @@ function toRecentMatchViewModel(
 }
 
 export async function getMatchDetailViewModel(matchId: string): Promise<MatchDetailViewModel | null> {
-  const [detail, playersById, historicalDataset, modelHealth] = await Promise.all([
+  const [localDetail, playersById, historicalDataset, modelHealth] = await Promise.all([
     getMatchDetailById(matchId),
     getLocalPlayersById(),
     loadActiveHistoricalDataset(),
     getLatestModelHealthEvaluation(),
   ]);
+
+  const detail = localDetail ?? (await getArchivedPredictionMatchById(matchId));
 
   if (!detail) {
     return null;
@@ -976,6 +1823,7 @@ export async function getMatchDetailViewModel(matchId: string): Promise<MatchDet
   return {
     match: matchVm,
     kind: detail.kind,
+    actualWinnerName: detail.actualWinnerName ?? null,
     favoredPlayerName,
     underdogPlayerName,
     favoriteWinProbability,
