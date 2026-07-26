@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { Tour } from "@/src/domain/shared";
 import { getSupabaseAdminClient } from "@/src/lib/supabase-admin";
+import { DEFAULT_TOUR, getUpcomingOutputDir } from "@/src/lib/tour-config";
 
-const UPCOMING_DIR = path.join(process.cwd(), "work", "upcoming", "atp");
 const BATCH_SIZE = 500;
 const DEMO_SOURCE = "local-demo-feed";
 
@@ -34,19 +35,128 @@ async function upsertBatches<T extends Record<string, unknown>>(
   }
 }
 
-async function pruneStaleUpcomingMatches(rows: Record<string, unknown>[]) {
+type UpcomingMatchIdentityRow = {
+  id: string;
+  tour: Tour;
+  external_match_id: string;
+};
+
+function upcomingMatchKey(tour: Tour, externalMatchId: string) {
+  return `${tour}:${externalMatchId}`;
+}
+
+async function reconcileUpcomingMatchIds(
+  matches: Record<string, unknown>[],
+  features: Record<string, unknown>[],
+  predictions: Record<string, unknown>[],
+) {
+  const client = getSupabaseAdminClient();
+  const matchesByTour = new Map<Tour, string[]>();
+
+  for (const row of matches) {
+    const tour = row.tour;
+    const externalMatchId = row.external_match_id;
+
+    if (
+      (tour !== "atp" && tour !== "wta") ||
+      typeof externalMatchId !== "string" ||
+      externalMatchId.length === 0
+    ) {
+      continue;
+    }
+
+    const current = matchesByTour.get(tour) ?? [];
+    current.push(externalMatchId);
+    matchesByTour.set(tour, current);
+  }
+
+  const existingRows: UpcomingMatchIdentityRow[] = [];
+
+  for (const [existingTour, externalMatchIds] of matchesByTour) {
+    for (let index = 0; index < externalMatchIds.length; index += BATCH_SIZE) {
+      const batch = [...new Set(externalMatchIds.slice(index, index + BATCH_SIZE))];
+      const { data, error } = await client
+        .from("upcoming_matches")
+        .select("id, tour, external_match_id")
+        .eq("tour", existingTour)
+        .in("external_match_id", batch);
+
+      if (error) {
+        throw new Error(`Failed to reconcile upcoming match IDs: ${error.message}`);
+      }
+
+      existingRows.push(...((data ?? []) as UpcomingMatchIdentityRow[]));
+    }
+  }
+
+  const existingIdByKey = new Map(
+    existingRows.map((row) => [upcomingMatchKey(row.tour, row.external_match_id), row.id]),
+  );
+  const remappedIds = new Map<string, string>();
+
+  const reconciledMatches = matches.map((row) => {
+    const tour = row.tour;
+    const externalMatchId = row.external_match_id;
+    const currentId = row.id;
+
+    if (
+      (tour !== "atp" && tour !== "wta") ||
+      typeof externalMatchId !== "string" ||
+      typeof currentId !== "string"
+    ) {
+      return row;
+    }
+
+    const existingId = existingIdByKey.get(upcomingMatchKey(tour, externalMatchId));
+    if (!existingId || existingId === currentId) {
+      return row;
+    }
+
+    remappedIds.set(currentId, existingId);
+    return {
+      ...row,
+      id: existingId,
+    };
+  });
+
+  const rewriteUpcomingMatchId = (row: Record<string, unknown>) => {
+    const currentUpcomingMatchId = row.upcoming_match_id;
+    if (typeof currentUpcomingMatchId !== "string") {
+      return row;
+    }
+
+    const canonicalId = remappedIds.get(currentUpcomingMatchId);
+    if (!canonicalId || canonicalId === currentUpcomingMatchId) {
+      return row;
+    }
+
+    return {
+      ...row,
+      upcoming_match_id: canonicalId,
+    };
+  };
+
+  return {
+    matches: reconciledMatches,
+    features: features.map(rewriteUpcomingMatchId),
+    predictions: predictions.map(rewriteUpcomingMatchId),
+  };
+}
+
+async function pruneStaleUpcomingMatches(rows: Record<string, unknown>[], tour: Tour) {
   const client = getSupabaseAdminClient();
   const activeIds = new Set(rows.map((row) => String(row.id)));
   const activeSources = new Set(rows.map((row) => String(row.source)));
 
   const pruneSources = new Set(activeSources);
-  if (activeSources.has("matchstat-rapidapi")) {
+  if ([...activeSources].some((source) => source !== DEMO_SOURCE)) {
     pruneSources.add(DEMO_SOURCE);
   }
 
   const { data, error } = await client
     .from("upcoming_matches")
     .select("id, source, status")
+    .eq("tour", tour)
     .in("source", [...pruneSources]);
 
   if (error) {
@@ -71,19 +181,26 @@ async function pruneStaleUpcomingMatches(rows: Record<string, unknown>[]) {
   return staleIds.length;
 }
 
-export async function loadUpcomingMatchPredictionsToSupabase() {
-  const [matches, features, predictions] = await Promise.all([
-    readJsonLines<Record<string, unknown>>(path.join(UPCOMING_DIR, "upcoming_matches.jsonl")),
+export async function loadUpcomingMatchPredictionsToSupabase(tour: Tour = DEFAULT_TOUR) {
+  const upcomingDir = getUpcomingOutputDir(tour);
+  const [rawMatches, rawFeatures, rawPredictions] = await Promise.all([
+    readJsonLines<Record<string, unknown>>(path.join(upcomingDir, "upcoming_matches.jsonl")),
     readJsonLines<Record<string, unknown>>(
-      path.join(UPCOMING_DIR, "upcoming_match_feature_snapshots.jsonl"),
+      path.join(upcomingDir, "upcoming_match_feature_snapshots.jsonl"),
     ),
     readJsonLines<Record<string, unknown>>(
-      path.join(UPCOMING_DIR, "upcoming_match_predictions.jsonl"),
+      path.join(upcomingDir, "upcoming_match_predictions.jsonl"),
     ),
   ]);
 
-  const prunedUpcomingMatches = await pruneStaleUpcomingMatches(matches);
-  await upsertBatches("upcoming_matches", matches, "id");
+  const { matches, features, predictions } = await reconcileUpcomingMatchIds(
+    rawMatches,
+    rawFeatures,
+    rawPredictions,
+  );
+
+  const prunedUpcomingMatches = await pruneStaleUpcomingMatches(matches, tour);
+  await upsertBatches("upcoming_matches", matches, "tour,external_match_id");
   await upsertBatches("upcoming_match_feature_snapshots", features, "upcoming_match_id");
   await upsertBatches("upcoming_match_predictions", predictions, "upcoming_match_id,model_version");
 
