@@ -68,6 +68,14 @@ type LiveSyncSummary = {
   generatedFeedPath: string;
 };
 
+function isLegacyPlayerExternalIdsConstraintError(error: { message?: string } | null) {
+  const message = error?.message ?? "";
+  return (
+    message.includes("player_external_ids_provider_external_player_id_key") ||
+    (message.includes("unique constraint") && message.includes("provider_external_player_id"))
+  );
+}
+
 async function readJsonLines<T>(filePath: string): Promise<T[]> {
   const content = await readFile(filePath, "utf8");
   return content
@@ -364,12 +372,15 @@ export async function syncLiveUpcomingFeed(
   }
 
   if (autoCreatedMappings.length > 0) {
-    const { error } = await client.from("player_external_ids").upsert(autoCreatedMappings, {
-      onConflict: "provider,external_player_id",
-      ignoreDuplicates: false,
-    });
+    const { error } = await client.from("player_external_ids").insert(autoCreatedMappings);
 
     if (error) {
+      if (isLegacyPlayerExternalIdsConstraintError(error)) {
+        throw new Error(
+          "Failed to insert player_external_ids because Supabase is still using the legacy unique constraint on (provider, external_player_id). Run the tour-aware player_external_ids migration and retry the refresh.",
+        );
+      }
+
       throw new Error(`Failed to upsert player_external_ids: ${error.message}`);
     }
   }
